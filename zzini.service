@@ -1,0 +1,17 @@
+# Example systemd config. Added for illustration
+
+[Unit]
+Description=zzini http server
+After=network.target
+StartLimitIntervalSec=10
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=zzini
+ExecStart=/usr/local/bin/zzini-server localhost public /my/path/to/certificate.pem ,y/path/to/private_key.pem 
+WorkingDirectory=/home/zzini
+
+[Install]
+WantedBy=multi-user.target
