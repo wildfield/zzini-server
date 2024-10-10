@@ -10,7 +10,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User=zzini
-ExecStart=/usr/local/bin/zzini-server localhost public /my/path/to/certificate.pem ,y/path/to/private_key.pem 
+ExecStart=/usr/local/bin/zzini-server example.org public /my/path/to/certificate.pem /my/path/to/private_key.pem 
 WorkingDirectory=/home/zzini
 
 [Install]
