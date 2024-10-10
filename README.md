@@ -15,7 +15,7 @@ This server uses Linux io_uring + BearSSL. It is reasonably fast and has predict
 0. Take a look at `src/config.zig` for any parameters to adjust
 1. Get BearSSL from https://bearssl.org/
 2. Compile the BearSSL static lib. Put it into `lib/` folder
-3. BearSSL includes go into `include/` folder
+3. BearSSL includes go into `include/bearssl/` folder
 4. This currently compiles with Zig 0.13. I would recommend using `zig build --release=safe` due to the fact that it preserves boundary checks
 5. Compiled binary is located at `zig-out/bin` folder
 
