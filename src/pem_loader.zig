@@ -82,6 +82,10 @@ pub fn read_pem(allocator: std.mem.Allocator, filename: []const u8) ![][]u8 {
 // Receives a writer as context
 fn pem_receive_bytes(dest_ctx: ?*anyopaque, src: ?*const anyopaque, src_len: usize) callconv(.C) void {
     const writers: *BufferSlice = @ptrCast(@alignCast(dest_ctx));
+    if (writers.current_idx >= writers.buffers.len) {
+        std.log.err("Exceeded max certs {}", .{writers.buffers.len});
+        std.process.exit(1);
+    }
     var writer = &writers.buffers[writers.current_idx];
     if (writer.pos + src_len > writer.buffer.len) {
         std.log.err("Buffer overflow when reading pem file", .{});
