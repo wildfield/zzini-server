@@ -1,7 +1,6 @@
 // How many bits are used to index a connection
 // Max number of connections would be 2 ** bits
 pub const index_bits: u5 = 10;
-pub const max_connections = 1 << index_bits;
 
 // Timeout for read requests
 pub const timeout_sec = 30;

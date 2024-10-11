@@ -7,6 +7,7 @@ const parser = @import("parser.zig");
 const config = @import("config.zig");
 
 const buffer_size = ssl.BR_SSL_BUFSIZE_MONO;
+pub const max_connections = 1 << config.index_bits;
 
 pub const IOOperationType = enum(u3) { accept, read, write, close, timeout };
 
@@ -51,13 +52,13 @@ pub const Connections = struct {
     pub fn init(allocator: std.mem.Allocator, key: keys.Keys) !Connections {
         var result: Connections = undefined;
         result.allocator = allocator;
-        result.busy = try allocator.allocWithOptions(bool, config.max_connections, null, false);
-        result.connections = try allocator.allocWithOptions(Connection, config.max_connections, null, .{});
-        result.ssl_contexts = try allocator.alloc(ssl.br_ssl_server_context, config.max_connections);
-        result.parsers = try allocator.alloc(parser.State, config.max_connections);
-        result.ssl_buffers = try allocator.alloc([]u8, config.max_connections);
+        result.busy = try allocator.allocWithOptions(bool, max_connections, null, false);
+        result.connections = try allocator.allocWithOptions(Connection, max_connections, null, .{});
+        result.ssl_contexts = try allocator.alloc(ssl.br_ssl_server_context, max_connections);
+        result.parsers = try allocator.alloc(parser.State, max_connections);
+        result.ssl_buffers = try allocator.alloc([]u8, max_connections);
         result.ssl_cache_context = try allocator.create(ssl.br_ssl_session_cache_lru);
-        result.ssl_cache_buffer = try allocator.alloc(u8, config.max_connections * 100);
+        result.ssl_cache_buffer = try allocator.alloc(u8, max_connections * 100);
         // Supported protocols
         result.procotol_names = try allocator.alloc([*c]u8, 1);
         result.procotol_names[0] = @ptrCast("http/1.1");

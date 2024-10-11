@@ -37,6 +37,8 @@ inline fn tracyMarkEnd(name: [*c]const u8) void {
     // tracy.___tracy_emit_frame_mark_end(name);
 }
 
+pub const max_connections = connections.max_connections;
+
 const CurrentArgument = enum {
     hostname,
     public_folder,
@@ -59,7 +61,7 @@ const CurrentArgument = enum {
 // Each connection can have at most 1 request
 // + at most 2 accept requests
 // However, sqe demands power of 2 entries
-pub const max_entries = config.max_connections << 1;
+pub const max_entries = max_connections << 1;
 
 pub fn main() !u8 {
     tracyMarkStart("main");
@@ -188,7 +190,7 @@ pub fn main() !u8 {
                 try posix.setsockopt(sock_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
                 const address_ssl = try std.net.Address.parseIp6("::", config.ssl_port);
                 try posix.bind(sock_ssl, &address_ssl.any, address_ssl.getOsSockLen());
-                try posix.listen(sock_ssl, config.max_connections);
+                try posix.listen(sock_ssl, max_connections);
             }
 
             // Non-ssl socket
@@ -206,7 +208,7 @@ pub fn main() !u8 {
                 try posix.setsockopt(sock_non_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
                 const address_non_ssl = try std.net.Address.parseIp6("::", config.non_ssl_port);
                 try posix.bind(sock_non_ssl, &address_non_ssl.any, address_non_ssl.getOsSockLen());
-                try posix.listen(sock_non_ssl, config.max_connections);
+                try posix.listen(sock_non_ssl, max_connections);
             }
 
             std.log.info("Starting server at non-SSL port {}, SSL port {}", .{ config.non_ssl_port, config.ssl_port });
@@ -291,7 +293,7 @@ fn run(
 
     var current_commands_array = try std
         .ArrayList(command.Command)
-        .initCapacity(allocator.allocator(), config.max_connections);
+        .initCapacity(allocator.allocator(), max_connections);
 
     defer {
         current_commands_array.deinit();
@@ -496,7 +498,7 @@ fn run(
 
                     {
                         // We need 1 free connection for ssl and 1 free for non-ssl
-                        if (conns.busy_connections_count < config.max_connections - 1) {
+                        if (conns.busy_connections_count < max_connections - 1) {
                             // Prep another submit
                             const sqe = try ring.get_sqe();
                             const sock = if (is_ssl) sock_ssl else sock_non_ssl;
