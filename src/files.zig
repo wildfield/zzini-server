@@ -13,7 +13,7 @@ pub const FileIndexMap = std.StringHashMap(usize);
 pub const LoadFilesResult = struct {
     buffer: []u8,
     file_index_map: FileIndexMap,
-    file_storage: []FileInfo,
+    file_storage: []const FileInfo,
 };
 
 const FileEntry = struct {

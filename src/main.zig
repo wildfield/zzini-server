@@ -79,7 +79,7 @@ pub fn main() !u8 {
     const executable = args.next().?;
     var current_arg: CurrentArgument = .hostname;
     var file_index_map: ?files.FileIndexMap = null;
-    var file_storage: ?[]files.FileInfo = null;
+    var file_storage: ?[]const files.FileInfo = null;
     var hostname: []const u8 = undefined;
 
     // Deferred buffers to deallocate in the outer scope
@@ -250,14 +250,14 @@ const ThreadContext = struct {
     conns: *connections.Connections,
     current_commands: *std.ArrayList(command.Command),
     file_index_map: files.FileIndexMap,
-    file_storage: []files.FileInfo,
+    file_storage: []const files.FileInfo,
 };
 
 fn run(
     sock_ssl: posix.fd_t,
     sock_non_ssl: posix.fd_t,
     file_index_map: files.FileIndexMap,
-    file_storage: []files.FileInfo,
+    file_storage: []const files.FileInfo,
     key: keys.Keys,
     hostname: []const u8,
 ) !void {
