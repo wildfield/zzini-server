@@ -9,7 +9,7 @@ pub const timeout_sec = 30;
 pub const cache_max_age = 3600;
 
 // Max size of a single compressed size (after compression, doesn't apply to images etc)
-pub const max_compressed_file_size: usize = 1024 * 1024;
+pub const max_compressed_file_size: usize = 64 * 1024 * 1024;
 
 // Total size for all files. If served folder exceeds this value, the server won't start
 pub const total_cache_size: usize = 256 * 1024 * 1024;

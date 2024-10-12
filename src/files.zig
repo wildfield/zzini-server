@@ -8,7 +8,13 @@ pub const FileInfo = struct {
     is_compressed: bool,
 };
 
-pub const FileStorage = std.StringHashMap(FileInfo);
+pub const FileIndexMap = std.StringHashMap(usize);
+
+pub const LoadFilesResult = struct {
+    buffer: []u8,
+    file_index_map: FileIndexMap,
+    file_storage: []FileInfo,
+};
 
 const FileEntry = struct {
     name: []const u8,
@@ -20,8 +26,6 @@ const FileEntry = struct {
 pub const FileError = error{
     cache_overflow,
 };
-
-pub const LoadFilesResult = struct { buffer: []u8, file_storage: FileStorage };
 
 // Passed in allocator will be used to allocate buffers like hashes and file contents
 // Returns slice and file_storage. Caller owns slice memory
@@ -40,7 +44,8 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
     }
     var arena_allocator = arena.allocator();
 
-    var file_storage = FileStorage.init(arena_allocator);
+    var file_index_map = FileIndexMap.init(arena_allocator);
+    var array_file_storage = std.ArrayList(FileInfo).init(arena_allocator);
 
     const file_cache_buffer = try arena_allocator.alloc(u8, config.max_compressed_file_size);
 
@@ -129,7 +134,8 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                             .mime = mime,
                             .is_compressed = should_compress,
                         };
-                        try file_storage.put(http_path, file_info);
+                        try array_file_storage.append(file_info);
+                        try file_index_map.put(http_path, array_file_storage.items.len - 1);
                     },
                     .directory => {
                         var should_close = false;
@@ -187,12 +193,14 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
         }
     }
 
-    const duped_file_storage = try file_storage.cloneWithAllocator(output_allocator);
+    const duped_file_index_map = try file_index_map.cloneWithAllocator(output_allocator);
+    const duped_array_file_storage = try output_allocator.dupe(FileInfo, array_file_storage.items);
 
     _ = external_allocator.resize(fixed_buffer, fixed_allocator.end_index);
     return .{
         .buffer = fixed_buffer[0..fixed_allocator.end_index],
-        .file_storage = duped_file_storage,
+        .file_index_map = duped_file_index_map,
+        .file_storage = duped_array_file_storage,
     };
 }
 
@@ -202,7 +210,7 @@ const FixupStep = enum { remove_trailing_slash, add_extension, add_index_html };
 
 // Accepts a path from the request, throws if it couldn't fix it up
 // This function does simple transformations like adding index.html to driectories and such
-pub fn normalizePath(storage: FileStorage, path_buffer: []u8, path_len: *usize) !void {
+pub fn getFileIndex(storage: FileIndexMap, path_buffer: []u8, path_len: *usize) !usize {
     const raw_path = path_buffer[0..path_len.*];
     const error_prefix = "/_error";
     // Attempting to read _error will always result in 404
@@ -210,9 +218,9 @@ pub fn normalizePath(storage: FileStorage, path_buffer: []u8, path_len: *usize) 
         return PathError.no_file;
     }
 
-    if (storage.contains(raw_path)) {
+    if (storage.get(raw_path)) |idx| {
         // We are done, no need to fixup
-        return;
+        return idx;
     }
     // For each fixup, we try a fixup, if this works we return
     // Otherwise, we return the path to the original state and try the next fixup
@@ -228,8 +236,8 @@ pub fn normalizePath(storage: FileStorage, path_buffer: []u8, path_len: *usize) 
                 if (path_len.* < path_buffer.len - suffix.len) {
                     @memcpy(path_buffer[path_len.* .. path_len.* + suffix.len], suffix);
                     path_len.* += suffix.len;
-                    if (storage.contains(path_buffer[0..path_len.*])) {
-                        return;
+                    if (storage.get(path_buffer[0..path_len.*])) |idx| {
+                        return idx;
                     }
                     path_len.* -= suffix.len;
                 }
@@ -240,8 +248,8 @@ pub fn normalizePath(storage: FileStorage, path_buffer: []u8, path_len: *usize) 
                 if (path_len.* < path_buffer.len - suffix.len) {
                     @memcpy(path_buffer[path_len.* .. path_len.* + suffix.len], suffix);
                     path_len.* += suffix.len;
-                    if (storage.contains(path_buffer[0..path_len.*])) {
-                        return;
+                    if (storage.get(path_buffer[0..path_len.*])) |idx| {
+                        return idx;
                     }
                     path_len.* -= suffix.len;
                 }
@@ -250,8 +258,8 @@ pub fn normalizePath(storage: FileStorage, path_buffer: []u8, path_len: *usize) 
             .remove_trailing_slash => {
                 if (path_len.* > 0 and path_buffer[path_len.* - 1] == '/') {
                     path_len.* -= 1;
-                    if (storage.contains(path_buffer[0..path_len.*])) {
-                        return;
+                    if (storage.get(path_buffer[0..path_len.*])) |idx| {
+                        return idx;
                     }
                     path_len.* += 1;
                 }

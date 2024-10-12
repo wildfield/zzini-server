@@ -78,7 +78,8 @@ pub fn main() !u8 {
 
     const executable = args.next().?;
     var current_arg: CurrentArgument = .hostname;
-    var file_storage: ?files.FileStorage = null;
+    var file_index_map: ?files.FileIndexMap = null;
+    var file_storage: ?[]files.FileInfo = null;
     var hostname: []const u8 = undefined;
 
     // Deferred buffers to deallocate in the outer scope
@@ -112,6 +113,7 @@ pub fn main() !u8 {
             .public_folder => {
                 // Read files
                 const load_files_result = try files.loadFiles(allocator, filename);
+                file_index_map = load_files_result.file_index_map;
                 file_storage = load_files_result.file_storage;
                 try deferred_buffers.append(load_files_result.buffer);
                 std.log.info("File cache used (bytes): {} / {}", .{ load_files_result.buffer.len, config.total_cache_size });
@@ -121,7 +123,7 @@ pub fn main() !u8 {
                     const val: command.HttpError = @enumFromInt(field.value);
                     const filename_or_null = val.fileName();
                     if (filename_or_null) |filename_check| {
-                        if (!file_storage.?.contains(filename_check)) {
+                        if (!file_index_map.?.contains(filename_check)) {
                             std.log.err("Misssing error file {s}", .{filename_check});
                             return 1;
                         }
@@ -221,6 +223,7 @@ pub fn main() !u8 {
                     const thread = try std.Thread.spawn(spawn_config, run, .{
                         sock_ssl,
                         sock_non_ssl,
+                        file_index_map.?,
                         file_storage.?,
                         key,
                         hostname,
@@ -246,13 +249,15 @@ const ThreadContext = struct {
     ring: *linux.IoUring,
     conns: *connections.Connections,
     current_commands: *std.ArrayList(command.Command),
-    file_storage: files.FileStorage,
+    file_index_map: files.FileIndexMap,
+    file_storage: []files.FileInfo,
 };
 
 fn run(
     sock_ssl: posix.fd_t,
     sock_non_ssl: posix.fd_t,
-    file_storage: files.FileStorage,
+    file_index_map: files.FileIndexMap,
+    file_storage: []files.FileInfo,
     key: keys.Keys,
     hostname: []const u8,
 ) !void {
@@ -304,8 +309,9 @@ fn run(
     const context = ThreadContext{
         .conns = &conns,
         .ring = &ring,
-        .file_storage = file_storage,
+        .file_index_map = file_index_map,
         .current_commands = current_commands,
+        .file_storage = file_storage,
     };
 
     while (true) {
@@ -675,8 +681,8 @@ fn writeResponseToBuffer(
     const header_sts = "Strict-Transport-Security: max-age=63072000; includeSubDomains; preload\r\n";
 
     switch (cmd_params.data) {
-        .filename => |filename| {
-            const info = context.file_storage.get(filename).?;
+        .file_idx => |file_idx| {
+            const info = context.file_storage[file_idx];
             var bytes_written: usize = 0;
             // We assume there's space for at least a header
             if (!cmd_params.was_status_written) {
@@ -716,7 +722,7 @@ fn writeResponseToBuffer(
                     std.log.debug("Index {} smaller write", .{index});
                     context.conns.connections[index].bottlenecked_write = .{
                         .index = index,
-                        .data = .{ .filename = filename },
+                        .data = .{ .file_idx = file_idx },
                         .was_status_written = true,
                         .was_header_written = true,
                         .file_bytes_written = cmd_params.file_bytes_written + len_to_write,
@@ -730,9 +736,10 @@ fn writeResponseToBuffer(
         .err => |err| {
             _ = try writer.write(err.statusLine());
             if (err.fileName()) |filename| {
+                const file_idx = context.file_index_map.get(filename).?;
                 try context.current_commands.append(.{ .write_data = .{
                     .index = index,
-                    .data = .{ .filename = filename },
+                    .data = .{ .file_idx = file_idx },
                     .was_status_written = true,
                     .was_header_written = false,
                     .file_bytes_written = 0,
@@ -929,10 +936,8 @@ fn processParsingOutput(
                         .data = .{ .ssl_redirect = path },
                         .is_head_method = is_head,
                     } });
-                } else if (files.normalizePath(context.file_storage, parse.path_buf, &parse.state.path_len)) {
-                    // The condition above modifies path_buf
-                    const path = parse.path_buf[0..parse.state.path_len];
-                    const etag = context.file_storage.get(path).?.hash;
+                } else if (files.getFileIndex(context.file_index_map, parse.path_buf, &parse.state.path_len)) |file_idx| {
+                    const etag = context.file_storage[file_idx].hash;
                     const parsed_etag = parse.etag_buf[0..parse.state.etag_len];
                     var cache_hit = false;
                     if (parsed_etag.len == 1 and parsed_etag[0] == '*') {
@@ -958,7 +963,7 @@ fn processParsingOutput(
                             .write_data = .{
                                 .index = index,
                                 .data = .{
-                                    .filename = path,
+                                    .file_idx = file_idx,
                                 },
                                 .is_head_method = is_head,
                             },

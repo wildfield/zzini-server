@@ -34,10 +34,10 @@ pub const HttpError = enum {
     }
 };
 
-pub const WriteDataType = enum { filename, err, ssl_redirect };
+pub const WriteDataType = enum { file_idx, err, ssl_redirect };
 
 pub const WriteData = union(WriteDataType) {
-    filename: []const u8,
+    file_idx: usize,
     err: HttpError,
     // Argument: requested location
     ssl_redirect: []const u8,
