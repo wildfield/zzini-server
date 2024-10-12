@@ -18,7 +18,7 @@ const c = @cImport({
 
 // Global options. This sets global log level to info
 pub const std_options = .{
-    .log_level = .info,
+    .log_level = .debug,
 };
 
 // const tracy = @cImport({
@@ -248,9 +248,11 @@ pub fn main() !u8 {
 const ThreadContext = struct {
     ring: *linux.IoUring,
     conns: *connections.Connections,
-    current_commands: *std.ArrayList(command.Command),
     file_index_map: files.FileIndexMap,
     file_storage: []const files.FileInfo,
+    current_date: *?[]const u8,
+    current_date_buf: []u8,
+    hostname: []const u8,
 };
 
 fn run(
@@ -296,143 +298,23 @@ fn run(
         _ = try ring.submit();
     }
 
-    var current_commands_array = try std
-        .ArrayList(command.Command)
-        .initCapacity(allocator.allocator(), max_connections);
-
-    defer {
-        current_commands_array.deinit();
-    }
-
-    var current_commands = &current_commands_array;
+    const current_date_buf: [128]u8 = undefined;
+    var current_date: ?[]const u8 = null;
 
     const context = ThreadContext{
         .conns = &conns,
         .ring = &ring,
         .file_index_map = file_index_map,
-        .current_commands = current_commands,
         .file_storage = file_storage,
+        .current_date_buf = current_date_buf,
+        .current_date = &current_date,
+        .hostname = hostname,
     };
 
     while (true) {
+        current_date = null;
+
         tracyMarkStart("loop");
-        tracyMarkStart("commands");
-        var current_date_buf: [128]u8 = undefined;
-        var current_date: ?[]const u8 = null;
-        while (current_commands.items.len > 0) {
-            const cmd = current_commands.pop();
-            switch (cmd) {
-                command.CommandType.check_status => |cmd_params| {
-                    std.log.debug("Check status", .{});
-                    const index = cmd_params.index;
-                    const conn = &conns.connections[index];
-                    if (conn.is_ssl) {
-                        const engine = &conns.ssl_contexts[index].eng;
-                        const state = ssl.br_ssl_engine_current_state(engine);
-                        std.log.debug("Status state {}", .{state});
-
-                        if (state == ssl.BR_SSL_CLOSED) {
-                            std.log.debug("Index {} engine is closed", .{index});
-                            try prepareClose(&ring, &conns, index);
-                        } else if ((state & ssl.BR_SSL_SENDREC) != 0 or (state & ssl.BR_SSL_RECVAPP) != 0) {
-                            std.log.debug("Status SendRec or RecvApp", .{});
-                            try extractSSLOutput(index, context);
-                        } else if ((state & ssl.BR_SSL_SENDAPP) != 0 and conns.connections[index].bottlenecked_write != null) {
-                            const write_params = conns.connections[index].bottlenecked_write.?;
-                            std.log.debug("Bottlenecked write apply", .{});
-                            try current_commands.append(.{ .write_data = write_params });
-                            conns.connections[index].bottlenecked_write = null;
-                        } else if ((state == ssl.BR_SSL_SENDAPP)) {
-                            std.log.debug("Status SendApp", .{});
-                            // Skip, we are writing more data
-                        } else {
-                            std.log.debug("Status else", .{});
-                            try prepareReadSSL(&ring, &conns, index, engine);
-                        }
-                    } else {
-                        if (conn.non_ssl_bytes_written == conn.non_ssl_bytes_pending) {
-                            conn.non_ssl_bytes_pending = 0;
-                            conn.non_ssl_bytes_written = 0;
-                            if (conns.connections[index].bottlenecked_write != null) {
-                                const write_params = conns.connections[index].bottlenecked_write.?;
-                                std.log.debug("Bottlenecked write apply", .{});
-                                try current_commands.append(.{ .write_data = write_params });
-                                conns.connections[index].bottlenecked_write = null;
-                            } else {
-                                try prepareReadNonSSL(&ring, &conns, index);
-                            }
-                        } else {
-                            try prepareWriteNonSSL(&ring, &conns, index);
-                        }
-                    }
-                },
-                command.CommandType.write_data => |cmd_params| {
-                    tracyMarkStart("write_data");
-                    defer {
-                        tracyMarkEnd("write_data");
-                    }
-                    const index = cmd_params.index;
-                    std.log.debug("write_data index {}", .{index});
-                    if (!conns.busy[index]) {
-                        if (!conns.connections[index].is_closing) {
-                            std.log.err("Index {} connection is unexpectedly closed", .{index});
-                            std.process.exit(1);
-                        }
-                    }
-                    if (conns.connections[index].is_ssl) {
-                        const engine = &conns.ssl_contexts[index].eng;
-                        const state = ssl.br_ssl_engine_current_state(engine);
-                        if (state == ssl.BR_SSL_CLOSED) {
-                            std.log.debug("Index {} engine is closed", .{index});
-                            try prepareClose(&ring, &conns, index);
-                        } else if ((state & ssl.BR_SSL_SENDAPP) != 0) {
-                            var capacity: usize = undefined;
-                            const buf = ssl.br_ssl_engine_sendapp_buf(engine, &capacity);
-                            const result = try writeResponseToBuffer(
-                                buf[0..capacity],
-                                index,
-                                &current_date,
-                                &current_date_buf,
-                                cmd_params,
-                                hostname,
-                                context,
-                            );
-                            ssl.br_ssl_engine_sendapp_ack(engine, result.bytes_written);
-                            if (result.should_flush) {
-                                ssl.br_ssl_engine_flush(engine, 0);
-                                try extractSSLOutput(index, context);
-                            }
-                        } else {
-                            std.log.debug("Index {} bottlenecked write", .{index});
-                            conns.connections[index].bottlenecked_write = cmd_params;
-                            try current_commands.append(.{ .check_status = .{ .index = index } });
-                        }
-                    } else {
-                        const capacity = conns.ssl_buffers[index].len;
-                        const buf = conns.ssl_buffers[index];
-                        const conn = &conns.connections[index];
-                        const bytes_written_earlier = conn.non_ssl_bytes_pending;
-                        const result = try writeResponseToBuffer(
-                            buf[bytes_written_earlier..capacity],
-                            index,
-                            &current_date,
-                            &current_date_buf,
-                            cmd_params,
-                            hostname,
-                            context,
-                        );
-                        if (result.should_flush) {
-                            conn.non_ssl_bytes_pending += result.bytes_written;
-                            try prepareWriteNonSSL(&ring, &conns, index);
-                        } else {
-                            conn.non_ssl_bytes_pending += result.bytes_written;
-                        }
-                    }
-                },
-            }
-        }
-        tracyMarkEnd("commands");
-
         tracyMarkStart("submit-and-wait");
         // Batch submits and call them after the processing is done
         _ = try ring.submit_and_wait(1);
@@ -546,12 +428,12 @@ fn run(
                         if (conns.connections[index].is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_recvrec_ack(engine, bytes_read);
-                            try extractSSLOutput(index, context);
+                            try nextStepSSL(index, context);
                         } else {
                             const buf = conns.ssl_buffers[index];
                             var parse = &conns.parsers[index];
                             const bytes_parsed = parse.parse(buf[0..bytes_read]);
-                            try processParsingOutput(
+                            _ = processParsingOutput(
                                 index,
                                 bytes_read,
                                 bytes_parsed,
@@ -590,10 +472,10 @@ fn run(
                         if (conns.connections[index].is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_sendrec_ack(engine, bytes_written);
+                            nextStepSSL(index, context);
                         } else {
                             conns.connections[index].non_ssl_bytes_written += bytes_written;
                         }
-                        try current_commands.append(.{ .check_status = .{ .index = index } });
                     }
                     tracyMarkEnd("write");
                 },
@@ -641,24 +523,21 @@ const WriteBufferResult = struct {
 fn writeResponseToBuffer(
     buf: []u8,
     index: usize,
-    current_date: *?[]const u8,
-    current_date_buf: []u8,
     cmd_params: command.WriteDataCommand,
-    hostname: []const u8,
     context: ThreadContext,
 ) !WriteBufferResult {
     // Create date if we need one
-    if (current_date.* == null) {
+    if (context.current_date.* == null) {
         const now = c.time(0);
         const tm = c.gmtime(&now).*;
         const date_bytes = c.strftime(
-            current_date_buf.ptr,
-            current_date_buf.len,
+            context.current_date_buf.ptr,
+            context.current_date_buf.len,
             "%a, %d %b %Y %H:%M:%S %Z",
             &tm,
         );
         if (date_bytes > 0) {
-            current_date.* = current_date_buf[0..date_bytes];
+            context.current_date.* = context.current_date_buf[0..date_bytes];
         } else {
             std.log.err("Failed to get current date", .{});
             std.process.exit(1);
@@ -680,6 +559,7 @@ fn writeResponseToBuffer(
     const header_cache = std.fmt.comptimePrint("Cache-Control: max-age={}\r\n", .{config.cache_max_age});
     const header_sts = "Strict-Transport-Security: max-age=63072000; includeSubDomains; preload\r\n";
 
+    context.conns.connections[index].writer_state = null;
     switch (cmd_params.data) {
         .file_idx => |file_idx| {
             const info = context.file_storage[file_idx];
@@ -690,7 +570,7 @@ fn writeResponseToBuffer(
             }
             if (!cmd_params.was_header_written) {
                 _ = try writer.write(header_server);
-                _ = try std.fmt.format(writer, header_date_format, .{current_date.*.?});
+                _ = try std.fmt.format(writer, header_date_format, .{context.current_date.*.?});
                 _ = try writer.write(header_connection);
                 _ = try writer.write(header_keepalive);
                 _ = try writer.write(header_cache);
@@ -720,7 +600,7 @@ fn writeResponseToBuffer(
                 bytes_written_output = bytes_written + len_to_write;
                 if (len_to_write < len_to_read) {
                     std.log.debug("Index {} smaller write", .{index});
-                    context.conns.connections[index].bottlenecked_write = .{
+                    context.conns.connections[index].writer_state = .{
                         .index = index,
                         .data = .{ .file_idx = file_idx },
                         .was_status_written = true,
@@ -737,7 +617,7 @@ fn writeResponseToBuffer(
             _ = try writer.write(err.statusLine());
             if (err.fileName()) |filename| {
                 const file_idx = context.file_index_map.get(filename).?;
-                try context.current_commands.append(.{ .write_data = .{
+                context.conns.connections[index].writer_state = .{
                     .index = index,
                     .data = .{ .file_idx = file_idx },
                     .was_status_written = true,
@@ -745,14 +625,14 @@ fn writeResponseToBuffer(
                     .file_bytes_written = 0,
                     .should_add_etag = false,
                     .is_head_method = cmd_params.is_head_method,
-                } });
+                };
                 return .{ .bytes_written = try stream.getPos(), .should_flush = false };
             } else {
                 _ = try writer.write(header_server);
                 if (!config.allow_insecure_http) {
                     _ = try writer.write(header_sts);
                 }
-                _ = try std.fmt.format(writer, header_date_format, .{current_date.*.?});
+                _ = try std.fmt.format(writer, header_date_format, .{context.current_date.*.?});
                 // Cache hit doesn't return content length
                 if (err.isCacheHit()) {
                     _ = try writer.write(header_cache);
@@ -770,10 +650,10 @@ fn writeResponseToBuffer(
             if (!config.allow_insecure_http) {
                 _ = try writer.write(header_sts);
             }
-            _ = try std.fmt.format(writer, header_date_format, .{current_date.*.?});
+            _ = try std.fmt.format(writer, header_date_format, .{context.current_date.*.?});
             _ = try writer.write("Content-Length: 0\r\n");
             // SSL Redirect needs a location
-            _ = try std.fmt.format(writer, "Location: https://{s}:{}{s}\r\n", .{ hostname, config.ssl_port, path });
+            _ = try std.fmt.format(writer, "Location: https://{s}:{}{s}\r\n", .{ context.hostname, config.ssl_port, path });
             _ = try writer.write("\r\n");
             return .{ .bytes_written = try stream.getPos(), .should_flush = true };
         },
@@ -794,7 +674,7 @@ fn closeGracefully(
         conns.connections[index].bottlenecked_write = null;
         const engine = &conns.ssl_contexts[index].eng;
         ssl.br_ssl_engine_close(engine);
-        try extractSSLOutput(index, context);
+        try nextStepSSL(index, context);
     } else {
         try prepareClose(context.ring, conns, index);
     }
@@ -875,67 +755,55 @@ fn prepareClose(ring: *linux.IoUring, conns: *connections.Connections, index: us
     }
 }
 
-fn extractSSLOutput(
+// Returns whether the opration was successful
+// False means close the connection
+// Error means unrecoverable error
+fn processRecvApp(
     index: usize,
+    engine: *ssl.br_ssl_engine_context,
     context: ThreadContext,
-) !void {
-    tracyMarkStart("check-ssl");
-    defer {
-        tracyMarkEnd("check-ssl");
-    }
-    std.log.debug("check index {}", .{index});
-    if (!context.conns.busy[index]) {
-        if (!context.conns.connections[index].is_closing) {
-            std.log.err("Index {} connection is unexpectedly closed", .{index});
-            std.process.exit(1);
-        }
-    }
-    const engine = &context.conns.ssl_contexts[index].eng;
-    const state = ssl.br_ssl_engine_current_state(engine);
-    if (state == ssl.BR_SSL_CLOSED) {
-        std.log.debug("Index {} engine is closed", .{index});
-        try prepareClose(context.ring, context.conns, index);
-    } else if ((state & ssl.BR_SSL_RECVAPP) != 0) {
-        var data_len: usize = undefined;
-        const buf = ssl.br_ssl_engine_recvapp_buf(engine, &data_len);
-        // Read data
-        var parse = &context.conns.parsers[index];
-        const possible_result = parse.parse(buf[0..data_len]);
-        ssl.br_ssl_engine_recvapp_ack(engine, data_len);
-        try processParsingOutput(
+) !bool {
+    var data_len: usize = undefined;
+    const buf = ssl.br_ssl_engine_recvapp_buf(engine, &data_len);
+    // Read data
+    var parse = &context.conns.parsers[index];
+    const possible_result = parse.parse(buf[0..data_len]);
+    ssl.br_ssl_engine_recvapp_ack(engine, data_len);
+    if (possible_result) |_| {
+        return processParsingOutput(
             index,
             data_len,
             possible_result,
             context,
         );
-    } else if ((state & ssl.BR_SSL_SENDREC) != 0) {
-        try prepareWriteSSL(context.ring, context.conns, index, engine);
     } else {
-        try context.current_commands.append(.{ .check_status = .{ .index = index } });
+        return false;
     }
 }
 
+// If return value is true, we must close the connection
 fn processParsingOutput(
     index: usize,
     data_len: usize,
     bytes_read: parser.Error!usize,
     context: ThreadContext,
-) !void {
+) bool {
     var parse = &context.conns.parsers[index];
+    var connection = &context.conns.connections[index];
     if (bytes_read) |result| {
         if (parse.state.parsing_done) {
             if (result < data_len) {
                 // We do not support pipelining
-                try closeImmediately(index, context.ring, context.conns);
+                return false;
             } else {
                 const is_head = parse.state.method == .head;
                 if (!config.allow_insecure_http and !context.conns.connections[index].is_ssl) {
                     const path = parse.path_buf[0..parse.state.path_len];
-                    try context.current_commands.append(.{ .write_data = .{
+                    connection.writer_state = .{
                         .index = index,
                         .data = .{ .ssl_redirect = path },
                         .is_head_method = is_head,
-                    } });
+                    };
                 } else if (files.getFileIndex(context.file_index_map, parse.path_buf, &parse.state.path_len)) |file_idx| {
                     const etag = context.file_storage[file_idx].hash;
                     const parsed_etag = parse.etag_buf[0..parse.state.etag_len];
@@ -954,35 +822,34 @@ fn processParsingOutput(
                     }
 
                     if (cache_hit) {
-                        try context.current_commands.append(.{ .write_data = .{
+                        connection.writer_state = .{
                             .index = index,
                             .data = .{ .err = .cache_hit },
-                        } });
+                        };
                     } else {
-                        try context.current_commands.append(.{
-                            .write_data = .{
-                                .index = index,
-                                .data = .{
-                                    .file_idx = file_idx,
-                                },
-                                .is_head_method = is_head,
+                        connection.writer_state = .{
+                            .index = index,
+                            .data = .{
+                                .file_idx = file_idx,
                             },
-                        });
+                            .is_head_method = is_head,
+                        };
                     }
                 } else |_| {
-                    try context.current_commands.append(.{ .write_data = .{
+                    connection.writer_state = .{
                         .index = index,
                         .data = .{
                             .err = .not_found,
                         },
                         .is_head_method = is_head,
-                    } });
+                    };
                 }
                 // Prepare for the next request
                 parse.reset();
+                return true;
             }
         } else {
-            try context.current_commands.append(.{ .check_status = .{ .index = index } });
+            return true;
         }
     } else |err| {
         std.log.debug("Parsing error {}", .{err});
@@ -990,23 +857,23 @@ fn processParsingOutput(
             if (parse.state.content_error) |content_error| {
                 switch (content_error) {
                     parser.ContentError.path_too_long => {
-                        try context.current_commands.append(.{ .write_data = .{
+                        connection.writer_state = .{
                             .index = index,
                             .data = .{
                                 .err = .not_found,
                             },
-                        } });
+                        };
                     },
                     parser.ContentError.unsupported_method => {
-                        try context.current_commands.append(.{ .write_data = .{
+                        connection.writer_state = .{
                             .index = index,
                             .data = .{
                                 .err = .unsupported_method,
                             },
-                        } });
+                        };
                     },
                     else => {
-                        try closeImmediately(index, context.ring, context.conns);
+                        return false;
                     },
                 }
             } else {
@@ -1014,8 +881,82 @@ fn processParsingOutput(
             }
             // Prepare for the next request
             parse.reset();
+            return false;
         } else {
-            try closeImmediately(index, context.ring, context.conns);
+            return false;
         }
+    }
+}
+
+fn processSendApp(
+    index: usize,
+    context: ThreadContext,
+    engine: *ssl.br_ssl_engine_context,
+    writer_state: command.WriteDataCommand,
+) !void {
+    var capacity: usize = undefined;
+    const buf = ssl.br_ssl_engine_sendapp_buf(engine, &capacity);
+    const result = try writeResponseToBuffer(
+        buf[0..capacity],
+        index,
+        writer_state,
+        context,
+    );
+    ssl.br_ssl_engine_sendapp_ack(engine, result.bytes_written);
+    if (result.should_flush) {
+        ssl.br_ssl_engine_flush(engine, 0);
+    }
+}
+
+// Checks the current status of things and proceeds based on the state
+// Should be called if and only if there are no other outstanding tasks
+fn nextStepSSL(
+    index: usize,
+    context: ThreadContext,
+) !void {
+    var repeat = true;
+    var close = false;
+    while (repeat) {
+        repeat = false;
+        const conn = &context.conns.connections[index];
+        const engine = &context.conns.ssl_contexts[index].eng;
+        const state = ssl.br_ssl_engine_current_state(engine);
+        if (state == ssl.BR_SSL_CLOSED) {
+            std.log.debug("Index {} engine is closed", .{index});
+            close = true;
+        } else if ((state & ssl.BR_SSL_SENDREC) > 0) {
+            try prepareWriteSSL(context.ring, context.conns, index, engine);
+        } else if ((state & ssl.BR_SSL_RECVAPP) > 0) {
+            if (conn.writer_state != null) {
+                // We are writing, not reading, that means we've received too much data from client
+                close = true;
+            } else {
+                const success = try processRecvApp(index, engine, context);
+                if (!success) {
+                    close = true;
+                } else {
+                    repeat = true;
+                }
+            }
+        } else if ((state & ssl.BR_SSL_SENDAPP) > 0 and conn.writer_state != null) {
+            const writer_state = conn.writer_state.?;
+            try processSendApp(
+                index,
+                context,
+                engine,
+                writer_state,
+            );
+            repeat = true;
+        } else if ((state & ssl.BR_SSL_RECVREC) > 0) {
+            if (conn.writer_state != null) {
+                std.log.err("Invalid state RECVREC with writer state {?}", .{conn.writer_state});
+                std.process.exit(1);
+            } else {
+                try prepareReadSSL(&context.ring, &context.conns, index, engine);
+            }
+        }
+    }
+    if (close) {
+        try prepareClose(&context.ring, &context.conns, index);
     }
 }

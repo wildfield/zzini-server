@@ -29,6 +29,8 @@ pub const Connection = struct {
     is_ssl: bool = true,
     non_ssl_bytes_pending: usize = 0,
     non_ssl_bytes_written: usize = 0,
+    // if null, it means we are reading
+    writer_state: ?command.WriteDataCommand = null,
 };
 
 pub const Connections = struct {
