@@ -49,28 +49,28 @@ Built with `zig build --release=fast`
 ```
 Summary:
   Success rate: 100.00%
-  Total:        16.7562 secs
-  Slowest:      1.4976 secs
-  Fastest:      0.0001 secs
-  Average:      0.0064 secs
-  Requests/sec: 157766.0325
+  Total:        10.0064 secs
+  Slowest:      0.8829 secs
+  Fastest:      0.0000 secs
+  Average:      0.0061 secs
+  Requests/sec: 166763.8429
 
-  Total data:   327.74 MiB
+  Total data:   206.81 MiB
   Size/request: 130 B
-  Size/sec:     19.56 MiB
+  Size/sec:     20.67 MiB
 
 Response time histogram:
   0.000 [1]       |
-  0.150 [2642933] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.300 [102]     |
-  0.449 [115]     |
-  0.599 [79]      |
-  0.749 [70]      |
-  0.899 [67]      |
-  1.048 [56]      |
-  1.198 [55]      |
-  1.348 [49]      |
-  1.498 [28]      |
+  0.088 [1667679] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.177 [197]     |
+  0.265 [36]      |
+  0.353 [38]      |
+  0.441 [35]      |
+  0.530 [34]      |
+  0.618 [33]      |
+  0.706 [34]      |
+  0.795 [34]      |
+  0.883 [30]      |
 ```
 
 - HTTPS with reuse (2048 RSA key)
@@ -80,28 +80,28 @@ Response time histogram:
 ```
 Summary:
   Success rate: 100.00%
-  Total:        5.4975 secs
-  Slowest:      2.0863 secs
+  Total:        10.0070 secs
+  Slowest:      2.4513 secs
   Fastest:      0.0001 secs
-  Average:      0.0121 secs
-  Requests/sec: 82611.9244
+  Average:      0.0095 secs
+  Requests/sec: 105917.8430
 
-  Total data:   56.31 MiB
+  Total data:   131.32 MiB
   Size/request: 130 B
-  Size/sec:     10.24 MiB
+  Size/sec:     13.12 MiB
 
 Response time histogram:
-  0.000 [1]      |
-  0.209 [453135] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.417 [0]      |
-  0.626 [0]      |
-  0.835 [0]      |
-  1.043 [0]      |
-  1.252 [0]      |
-  1.460 [0]      |
-  1.669 [0]      |
-  1.878 [0]      |
-  2.086 [1023]   |
+  0.000 [1]       |
+  0.245 [1058184] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.490 [0]       |
+  0.735 [0]       |
+  0.981 [0]       |
+  1.226 [0]       |
+  1.471 [512]     |
+  1.716 [332]     |
+  1.961 [63]      |
+  2.206 [61]      |
+  2.451 [55]      |
 ```
 
 - HTTPS without reuse (2048 RSA key)
