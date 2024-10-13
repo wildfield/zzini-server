@@ -246,7 +246,6 @@ pub fn main() !u8 {
 }
 
 const ThreadContext = struct {
-    ring: *linux.IoUring,
     conns: *connections.Connections,
     file_index_map: files.FileIndexMap,
     file_storage: []const files.FileInfo,
@@ -303,7 +302,6 @@ fn run(
 
     const context = ThreadContext{
         .conns = &conns,
-        .ring = &ring,
         .file_index_map = file_index_map,
         .file_storage = file_storage,
         .current_date_buf = &current_date_buf,
@@ -411,7 +409,7 @@ fn run(
                         switch (err) {
                             .CANCELED => {
                                 std.log.debug("Canceled read, closing connection gracefully at {}", .{index});
-                                try closeGracefully(index, context);
+                                try closeGracefully(index, context, &ring);
                                 continue;
                             },
                             else => {
@@ -428,10 +426,10 @@ fn run(
                         if (conns.connections[index].is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_recvrec_ack(engine, bytes_read);
-                            try nextStepSSL(index, context);
+                            try nextStepSSL(index, context, &ring);
                         } else {
                             conns.connections[index].non_ssl_read_bytes_pending = bytes_read;
-                            try nextStepNonSSL(index, context);
+                            try nextStepNonSSL(index, context, &ring);
                         }
                     } else {
                         try closeImmediately(index, &ring, &conns);
@@ -465,7 +463,7 @@ fn run(
                         if (conns.connections[index].is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_sendrec_ack(engine, bytes_written);
-                            try nextStepSSL(index, context);
+                            try nextStepSSL(index, context, &ring);
                         } else {
                             const conn = &conns.connections[index];
                             conn.non_ssl_write_bytes_done += bytes_written;
@@ -476,7 +474,7 @@ fn run(
                                 std.log.err("We wrote more bytes than were pending.", .{});
                                 std.process.exit(1);
                             }
-                            try nextStepNonSSL(index, context);
+                            try nextStepNonSSL(index, context, &ring);
                         }
                     }
                     tracyMarkEnd("write");
@@ -669,6 +667,7 @@ fn writeResponseToBuffer(
 fn closeGracefully(
     index: usize,
     context: ThreadContext,
+    ring: *linux.IoUring,
 ) !void {
     tracyMarkStart("close");
     defer {
@@ -679,9 +678,9 @@ fn closeGracefully(
         conns.connections[index].is_closing_gracefully = true;
         const engine = &conns.ssl_contexts[index].eng;
         ssl.br_ssl_engine_close(engine);
-        try nextStepSSL(index, context);
+        try nextStepSSL(index, context, ring);
     } else {
-        try prepareClose(context.ring, conns, index);
+        try prepareClose(ring, conns, index);
     }
 }
 
@@ -915,6 +914,7 @@ fn processSendApp(
 fn nextStepSSL(
     index: usize,
     context: ThreadContext,
+    ring: *linux.IoUring,
 ) !void {
     var repeat = true;
     var close = false;
@@ -927,7 +927,7 @@ fn nextStepSSL(
             std.log.debug("Index {} engine is closed", .{index});
             close = true;
         } else if ((state & ssl.BR_SSL_SENDREC) > 0) {
-            try prepareWriteSSL(context.ring, context.conns, index, engine);
+            try prepareWriteSSL(ring, context.conns, index, engine);
         } else if ((state & ssl.BR_SSL_RECVAPP) > 0) {
             if (conn.writer_state != null) {
                 // We are writing, not reading, that means we've received too much data from client
@@ -954,18 +954,19 @@ fn nextStepSSL(
                 std.log.err("Invalid state RECVREC with writer state {?}", .{conn.writer_state});
                 std.process.exit(1);
             } else {
-                try prepareReadSSL(context.ring, context.conns, index, engine);
+                try prepareReadSSL(ring, context.conns, index, engine);
             }
         }
     }
     if (close) {
-        try prepareClose(context.ring, context.conns, index);
+        try prepareClose(ring, context.conns, index);
     }
 }
 
 fn nextStepNonSSL(
     index: usize,
     context: ThreadContext,
+    ring: *linux.IoUring,
 ) !void {
     var repeat = true;
     var close = false;
@@ -987,16 +988,16 @@ fn nextStepNonSSL(
                 );
                 conn.non_ssl_write_bytes_pending += result.bytes_written;
                 if (result.should_flush) {
-                    try prepareWriteNonSSL(context.ring, context.conns, index);
+                    try prepareWriteNonSSL(ring, context.conns, index);
                 } else {
                     repeat = true;
                 }
             }
         } else {
             if (conn.non_ssl_write_bytes_pending > 0) {
-                try prepareWriteNonSSL(context.ring, context.conns, index);
+                try prepareWriteNonSSL(ring, context.conns, index);
             } else if (conn.non_ssl_read_bytes_pending == 0) {
-                try prepareReadNonSSL(context.ring, context.conns, index);
+                try prepareReadNonSSL(ring, context.conns, index);
             } else {
                 var buf = context.conns.ssl_buffers[index];
                 var parse = &context.conns.parsers[index];
@@ -1018,6 +1019,6 @@ fn nextStepNonSSL(
         }
     }
     if (close) {
-        try prepareClose(context.ring, context.conns, index);
+        try prepareClose(ring, context.conns, index);
     }
 }
