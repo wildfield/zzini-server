@@ -15,10 +15,10 @@ pub const max_compressed_file_size: usize = 64 * 1024 * 1024;
 pub const total_cache_size: usize = 256 * 1024 * 1024;
 
 // Port for non SSL socket
-pub const non_ssl_port = 80;
+pub const non_ssl_port = 9090;
 
 // Port for SSL socket
-pub const ssl_port = 443;
+pub const ssl_port = 9091;
 
 // If false, http requests will be redirected to https endpoint
 pub const allow_insecure_http = false;

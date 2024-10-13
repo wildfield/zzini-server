@@ -298,7 +298,7 @@ fn run(
         _ = try ring.submit();
     }
 
-    const current_date_buf: [128]u8 = undefined;
+    var current_date_buf: [128]u8 = undefined;
     var current_date: ?[]const u8 = null;
 
     const context = ThreadContext{
@@ -306,7 +306,7 @@ fn run(
         .ring = &ring,
         .file_index_map = file_index_map,
         .file_storage = file_storage,
-        .current_date_buf = current_date_buf,
+        .current_date_buf = &current_date_buf,
         .current_date = &current_date,
         .hostname = hostname,
     };
@@ -430,15 +430,8 @@ fn run(
                             ssl.br_ssl_engine_recvrec_ack(engine, bytes_read);
                             try nextStepSSL(index, context);
                         } else {
-                            const buf = conns.ssl_buffers[index];
-                            var parse = &conns.parsers[index];
-                            const bytes_parsed = parse.parse(buf[0..bytes_read]);
-                            _ = processParsingOutput(
-                                index,
-                                bytes_read,
-                                bytes_parsed,
-                                context,
-                            );
+                            conns.connections[index].non_ssl_read_bytes_pending = bytes_read;
+                            try nextStepNonSSL(index, context);
                         }
                     } else {
                         try closeImmediately(index, &ring, &conns);
@@ -472,9 +465,18 @@ fn run(
                         if (conns.connections[index].is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_sendrec_ack(engine, bytes_written);
-                            nextStepSSL(index, context);
+                            try nextStepSSL(index, context);
                         } else {
-                            conns.connections[index].non_ssl_bytes_written += bytes_written;
+                            const conn = &conns.connections[index];
+                            conn.non_ssl_write_bytes_done += bytes_written;
+                            if (conn.non_ssl_write_bytes_done == conn.non_ssl_write_bytes_pending) {
+                                conn.non_ssl_write_bytes_pending = 0;
+                                conn.non_ssl_write_bytes_done = 0;
+                            } else if (conn.non_ssl_write_bytes_done > conn.non_ssl_write_bytes_pending) {
+                                std.log.err("We wrote more bytes than were pending.", .{});
+                                std.process.exit(1);
+                            }
+                            try nextStepNonSSL(index, context);
                         }
                     }
                     tracyMarkEnd("write");
@@ -559,7 +561,6 @@ fn writeResponseToBuffer(
     const header_cache = std.fmt.comptimePrint("Cache-Control: max-age={}\r\n", .{config.cache_max_age});
     const header_sts = "Strict-Transport-Security: max-age=63072000; includeSubDomains; preload\r\n";
 
-    context.conns.connections[index].writer_state = null;
     switch (cmd_params.data) {
         .file_idx => |file_idx| {
             const info = context.file_storage[file_idx];
@@ -607,9 +608,12 @@ fn writeResponseToBuffer(
                         .was_header_written = true,
                         .file_bytes_written = cmd_params.file_bytes_written + len_to_write,
                     };
+                } else {
+                    context.conns.connections[index].writer_state = null;
                 }
             } else {
                 bytes_written_output = bytes_written;
+                context.conns.connections[index].writer_state = null;
             }
             return .{ .bytes_written = bytes_written_output, .should_flush = true };
         },
@@ -640,6 +644,7 @@ fn writeResponseToBuffer(
                     _ = try writer.write("Content-Length: 0\r\n");
                 }
                 _ = try writer.write("\r\n");
+                context.conns.connections[index].writer_state = null;
                 return .{ .bytes_written = try stream.getPos(), .should_flush = true };
             }
         },
@@ -655,6 +660,7 @@ fn writeResponseToBuffer(
             // SSL Redirect needs a location
             _ = try std.fmt.format(writer, "Location: https://{s}:{}{s}\r\n", .{ context.hostname, config.ssl_port, path });
             _ = try writer.write("\r\n");
+            context.conns.connections[index].writer_state = null;
             return .{ .bytes_written = try stream.getPos(), .should_flush = true };
         },
     }
@@ -671,7 +677,6 @@ fn closeGracefully(
     const conns = context.conns;
     if (conns.connections[index].is_ssl and !conns.connections[index].is_closing_gracefully) {
         conns.connections[index].is_closing_gracefully = true;
-        conns.connections[index].bottlenecked_write = null;
         const engine = &conns.ssl_contexts[index].eng;
         ssl.br_ssl_engine_close(engine);
         try nextStepSSL(index, context);
@@ -681,7 +686,6 @@ fn closeGracefully(
 }
 
 fn closeImmediately(index: usize, ring: *linux.IoUring, conns: *connections.Connections) !void {
-    conns.connections[index].bottlenecked_write = null;
     const engine = &conns.ssl_contexts[index].eng;
     ssl.br_ssl_engine_close(engine);
     try prepareClose(ring, conns, index);
@@ -729,8 +733,8 @@ fn prepareWriteSSL(ring: *linux.IoUring, conns: *connections.Connections, index:
 
 fn prepareWriteNonSSL(ring: *linux.IoUring, conns: *connections.Connections, index: usize) !void {
     const buf = conns.ssl_buffers[index];
-    const start_bytes = conns.connections[index].non_ssl_bytes_written;
-    const end_bytes = conns.connections[index].non_ssl_bytes_pending;
+    const start_bytes = conns.connections[index].non_ssl_write_bytes_done;
+    const end_bytes = conns.connections[index].non_ssl_write_bytes_pending;
     if (end_bytes == 0) {
         unreachable;
     }
@@ -769,19 +773,15 @@ fn processRecvApp(
     var parse = &context.conns.parsers[index];
     const possible_result = parse.parse(buf[0..data_len]);
     ssl.br_ssl_engine_recvapp_ack(engine, data_len);
-    if (possible_result) |_| {
-        return processParsingOutput(
-            index,
-            data_len,
-            possible_result,
-            context,
-        );
-    } else {
-        return false;
-    }
+    return processParsingOutput(
+        index,
+        data_len,
+        possible_result,
+        context,
+    );
 }
 
-// If return value is true, we must close the connection
+// If return value is false, we must close the connection
 fn processParsingOutput(
     index: usize,
     data_len: usize,
@@ -805,6 +805,7 @@ fn processParsingOutput(
                         .is_head_method = is_head,
                     };
                 } else if (files.getFileIndex(context.file_index_map, parse.path_buf, &parse.state.path_len)) |file_idx| {
+                    std.log.debug("File index: {}", .{file_idx});
                     const etag = context.file_storage[file_idx].hash;
                     const parsed_etag = parse.etag_buf[0..parse.state.etag_len];
                     var cache_hit = false;
@@ -877,12 +878,14 @@ fn processParsingOutput(
                     },
                 }
             } else {
+                // We always set content error before going into drained state
                 unreachable;
             }
             // Prepare for the next request
             parse.reset();
-            return false;
+            return true;
         } else {
+            // Malformed request, no need to keep the connection
             return false;
         }
     }
@@ -952,11 +955,70 @@ fn nextStepSSL(
                 std.log.err("Invalid state RECVREC with writer state {?}", .{conn.writer_state});
                 std.process.exit(1);
             } else {
-                try prepareReadSSL(&context.ring, &context.conns, index, engine);
+                try prepareReadSSL(context.ring, context.conns, index, engine);
             }
         }
     }
     if (close) {
-        try prepareClose(&context.ring, &context.conns, index);
+        try prepareClose(context.ring, context.conns, index);
+    }
+}
+
+fn nextStepNonSSL(
+    index: usize,
+    context: ThreadContext,
+) !void {
+    var repeat = true;
+    var close = false;
+
+    const conn = &context.conns.connections[index];
+    while (repeat) {
+        repeat = false;
+        if (conn.writer_state) |writer_state| {
+            if (conn.non_ssl_read_bytes_pending > 0) {
+                // We have extra data
+                close = true;
+            } else {
+                const buf = context.conns.ssl_buffers[index];
+                const result = try writeResponseToBuffer(
+                    buf,
+                    index,
+                    writer_state,
+                    context,
+                );
+                conn.non_ssl_write_bytes_pending += result.bytes_written;
+                if (result.should_flush) {
+                    try prepareWriteNonSSL(context.ring, context.conns, index);
+                } else {
+                    repeat = true;
+                }
+            }
+        } else {
+            if (conn.non_ssl_write_bytes_pending > 0) {
+                try prepareWriteNonSSL(context.ring, context.conns, index);
+            } else if (conn.non_ssl_read_bytes_pending == 0) {
+                try prepareReadNonSSL(context.ring, context.conns, index);
+            } else {
+                var buf = context.conns.ssl_buffers[index];
+                var parse = &context.conns.parsers[index];
+                const data_len = conn.non_ssl_read_bytes_pending;
+                const possible_result = parse.parse(buf[0..data_len]);
+                conn.non_ssl_read_bytes_pending = 0;
+                const success = processParsingOutput(
+                    index,
+                    data_len,
+                    possible_result,
+                    context,
+                );
+                if (success) {
+                    repeat = true;
+                } else {
+                    close = true;
+                }
+            }
+        }
+    }
+    if (close) {
+        try prepareClose(context.ring, context.conns, index);
     }
 }
