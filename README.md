@@ -8,7 +8,7 @@ This is a toy project, I have no idea what I'm doing. **Do not use in production
 
 ## Purpose
 
-This server uses Linux io_uring + BearSSL. It is reasonably fast and has predictable memory usage. While the server is running, it is _mostly_ not allocating memory dynamically
+This server uses Linux io_uring + BearSSL. It is reasonably fast and has predictable memory usage. While the server is running, it is not allocating memory dynamically
 
 # Building
 
