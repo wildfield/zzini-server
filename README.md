@@ -38,7 +38,7 @@ This server uses Linux io_uring + BearSSL. It is reasonably fast and has predict
 
 # Benchmarks
 
-Here are some lazy benchmarks on my machine on a single thread against localhost (on 9090 and 9091 ports + allow insecure http, changeable in the config)
+Here are some lazy benchmarks on my machine on *a single thread* against localhost (on 9090 and 9091 ports + allow insecure http, changeable in the config)
 
 Built with `zig build --release=fast`
 
