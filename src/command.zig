@@ -52,10 +52,3 @@ pub const WriteDataCommand = struct {
     should_add_etag: bool = true,
     is_head_method: bool = false,
 };
-
-pub const CheckStatusCommand = struct { index: usize };
-
-pub const Command = union(CommandType) {
-    write_data: WriteDataCommand,
-    check_status: CheckStatusCommand,
-};

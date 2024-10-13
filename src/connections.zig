@@ -23,12 +23,14 @@ pub const IOOperation = union(IOOperationType) {
 
 pub const Connection = struct {
     socket: std.posix.fd_t = 0,
-    bottlenecked_write: ?command.WriteDataCommand = null,
     is_closing_gracefully: bool = false,
     is_closing: bool = false,
     is_ssl: bool = true,
-    non_ssl_bytes_pending: usize = 0,
-    non_ssl_bytes_written: usize = 0,
+    // if null, it means we are reading
+    writer_state: ?command.WriteDataCommand = null,
+    non_ssl_read_bytes_pending: usize = 0,
+    non_ssl_write_bytes_pending: usize = 0,
+    non_ssl_write_bytes_done: usize = 0,
 };
 
 pub const Connections = struct {
