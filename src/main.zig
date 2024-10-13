@@ -705,8 +705,8 @@ fn prepareReadSSL(ring: *linux.IoUring, conns: *connections.Connections, index: 
 }
 
 fn prepareReadNonSSL(ring: *linux.IoUring, conns: *connections.Connections, index: usize) !void {
-    const capacity_available = conns.ssl_buffers[index].len;
     const buf = conns.ssl_buffers[index];
+    const capacity_available = buf.len;
     if (capacity_available == 0) {
         unreachable;
     }
@@ -805,7 +805,6 @@ fn processParsingOutput(
                         .is_head_method = is_head,
                     };
                 } else if (files.getFileIndex(context.file_index_map, parse.path_buf, &parse.state.path_len)) |file_idx| {
-                    std.log.debug("File index: {}", .{file_idx});
                     const etag = context.file_storage[file_idx].hash;
                     const parsed_etag = parse.etag_buf[0..parse.state.etag_len];
                     var cache_hit = false;
@@ -981,7 +980,7 @@ fn nextStepNonSSL(
             } else {
                 const buf = context.conns.ssl_buffers[index];
                 const result = try writeResponseToBuffer(
-                    buf,
+                    buf[conn.non_ssl_read_bytes_pending..buf.len],
                     index,
                     writer_state,
                     context,

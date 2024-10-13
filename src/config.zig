@@ -21,7 +21,7 @@ pub const non_ssl_port = 9090;
 pub const ssl_port = 9091;
 
 // If false, http requests will be redirected to https endpoint
-pub const allow_insecure_http = false;
+pub const allow_insecure_http = true;
 
 // How many threads to use to server requests
 pub const thread_num = 1;
