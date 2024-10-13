@@ -192,6 +192,14 @@ pub fn main() !u8 {
                 try posix.setsockopt(sock_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
                 const address_ssl = try std.net.Address.parseIp6("::", config.ssl_port);
                 try posix.bind(sock_ssl, &address_ssl.any, address_ssl.getOsSockLen());
+
+                try posix.setsockopt(
+                    sock_ssl,
+                    posix.IPPROTO.TCP,
+                    std.os.linux.TCP.NODELAY,
+                    &std.mem.toBytes(@as(c_int, 1)),
+                );
+
                 try posix.listen(sock_ssl, max_connections);
             }
 
@@ -210,6 +218,14 @@ pub fn main() !u8 {
                 try posix.setsockopt(sock_non_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
                 const address_non_ssl = try std.net.Address.parseIp6("::", config.non_ssl_port);
                 try posix.bind(sock_non_ssl, &address_non_ssl.any, address_non_ssl.getOsSockLen());
+
+                try posix.setsockopt(
+                    sock_non_ssl,
+                    posix.IPPROTO.TCP,
+                    std.os.linux.TCP.NODELAY,
+                    &std.mem.toBytes(@as(c_int, 1)),
+                );
+
                 try posix.listen(sock_non_ssl, max_connections);
             }
 
@@ -362,13 +378,6 @@ fn run(
                             std.log.err("BearSSL error: {}", .{err});
                             std.process.exit(1);
                         }
-
-                        try posix.setsockopt(
-                            accepted_sock,
-                            posix.IPPROTO.TCP,
-                            std.os.linux.TCP.NODELAY,
-                            &std.mem.toBytes(@as(c_int, 1)),
-                        );
 
                         // Prep read
                         if (is_ssl) {
