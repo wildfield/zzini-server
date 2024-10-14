@@ -51,6 +51,9 @@ pub const Connections = struct {
     is_accept_non_ssl_bottlenecked: bool,
     busy_connections_count: usize,
 
+    // Small optimization to reduce scanning time
+    earliest_free_index: usize,
+
     pub fn init(allocator: std.mem.Allocator, key: keys.Keys) !Connections {
         var result: Connections = undefined;
         result.allocator = allocator;
@@ -67,6 +70,7 @@ pub const Connections = struct {
         result.is_accept_ssl_bottlenecked = false;
         result.is_accept_non_ssl_bottlenecked = false;
         result.busy_connections_count = 0;
+        result.earliest_free_index = 0;
 
         for (0..result.parsers.len) |idx| {
             result.parsers[idx] = try parser.State.init(allocator);
@@ -137,9 +141,8 @@ pub const Connections = struct {
     }
 
     pub fn nextFreeIndex(self: *const Connections) ?usize {
-        for (0..self.busy.len) |idx| {
-            const busy_val = self.busy[idx];
-            if (busy_val == false) {
+        for (self.earliest_free_index..self.busy.len) |idx| {
+            if (self.busy[idx] == false) {
                 return idx;
             }
         }

@@ -369,8 +369,9 @@ fn run(
                             .socket = accepted_sock,
                             .is_ssl = is_ssl,
                         };
-                        conns.busy_connections_count += 1;
                         conns.parsers[index].reset();
+                        conns.busy_connections_count += 1;
+                        conns.earliest_free_index += 1;
 
                         const result = ssl.br_ssl_server_reset(&conns.ssl_contexts[index]);
                         if (result != 1) {
@@ -492,6 +493,9 @@ fn run(
                     std.log.debug("Event close", .{});
                     if (conns.busy[index]) {
                         conns.busy_connections_count -= 1;
+                        if (index > conns.earliest_free_index) {
+                            conns.earliest_free_index = index;
+                        }
                         const is_ssl = conns.connections[index].is_ssl;
                         if (is_ssl and conns.is_accept_ssl_bottlenecked) {
                             conns.is_accept_ssl_bottlenecked = false;
