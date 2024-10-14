@@ -23,7 +23,7 @@ pub const ssl_port = 443;
 // If false, http requests will be redirected to https endpoint
 pub const allow_insecure_http = false;
 
-// How many threads to use to server requests
+// How many threads to use to serve requests
 // Special value 0 means equal to cpu cores
 pub const thread_num = 0;
 
