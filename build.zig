@@ -15,11 +15,20 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const strip: ?bool = switch (b.release_mode) {
+        .off => false,
+        .any => null,
+        .fast => true,
+        .safe => true,
+        .small => true,
+    };
+
     const exe = b.addExecutable(.{
         .name = "zzini-server",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
     });
 
     exe.linkLibC();
