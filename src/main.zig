@@ -231,10 +231,24 @@ pub fn main() !u8 {
 
             std.log.info("Starting server at non-SSL port {}, SSL port {}", .{ config.non_ssl_port, config.ssl_port });
 
+            var thread_num: usize = config.thread_num;
+            if (thread_num == 0) {
+                const cpus = try std.posix.sched_getaffinity(0);
+                var cpu_count = std.posix.CPU_COUNT(cpus);
+                if (cpu_count == 0) {
+                    cpu_count = 1;
+                }
+                thread_num = cpu_count;
+            }
+            std.log.info("Thread count: {}", .{thread_num});
+
             // Start server
             if (!config.dry_run) {
-                var threads: [config.thread_num]std.Thread = undefined;
-                for (0..config.thread_num) |idx| {
+                var threads = try std.ArrayList(std.Thread).initCapacity(allocator, thread_num);
+                defer {
+                    threads.deinit();
+                }
+                for (0..thread_num) |_| {
                     const spawn_config = std.Thread.SpawnConfig{};
                     const thread = try std.Thread.spawn(spawn_config, run, .{
                         sock_ssl,
@@ -244,9 +258,9 @@ pub fn main() !u8 {
                         key,
                         hostname,
                     });
-                    threads[idx] = thread;
+                    try threads.append(thread);
                 }
-                for (threads) |thread| {
+                for (threads.items) |thread| {
                     std.Thread.join(thread);
                 }
             }

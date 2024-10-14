@@ -24,7 +24,8 @@ pub const ssl_port = 443;
 pub const allow_insecure_http = false;
 
 // How many threads to use to server requests
-pub const thread_num = 1;
+// Special value 0 means equal to cpu cores
+pub const thread_num = 0;
 
 // Do not start server
 pub const dry_run = false;
