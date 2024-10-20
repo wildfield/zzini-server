@@ -633,10 +633,16 @@ fn run(
                     } else {
                         const conn = &conns.connections[index];
                         conn.file_reader_state = null;
-                        if (conn.is_ssl) {
-                            try nextStepSSL(index, context, &ring);
+                        if (conn.is_closing) {
+                            const sqe = try ring.get_sqe();
+                            sqe.prep_close(conns.connections[index].socket);
+                            sqe.user_data = connections.encode(.{ .close_connection = index });
                         } else {
-                            try nextStepNonSSL(index, context, &ring);
+                            if (conn.is_ssl) {
+                                try nextStepSSL(index, context, &ring);
+                            } else {
+                                try nextStepNonSSL(index, context, &ring);
+                            }
                         }
                     }
                 },
@@ -905,9 +911,31 @@ fn prepareClose(ring: *linux.IoUring, conns: *connections.Connections, index: us
     }
     if (!conns.connections[index].is_closing) {
         conns.connections[index].is_closing = true;
-        const sqe = try ring.get_sqe();
-        sqe.prep_close(conns.connections[index].socket);
-        sqe.user_data = connections.encode(.{ .close_connection = index });
+        var closing_file = false;
+        if (conns.connections[index].file_reader_state) |reader| {
+            var handle: ?std.posix.fd_t = null;
+            switch (reader) {
+                .open_file => {},
+                .read_file => |info| {
+                    handle = info.handle;
+                },
+                .close_file => |close_handle| {
+                    handle = close_handle;
+                },
+            }
+            if (handle) {
+                const sqe = try ring.get_sqe();
+                sqe.prep_close(handle);
+                sqe.user_data = connections.encode(.{ .close_file = index });
+                closing_file = true;
+            }
+        }
+
+        if (!closing_file) {
+            const sqe = try ring.get_sqe();
+            sqe.prep_close(conns.connections[index].socket);
+            sqe.user_data = connections.encode(.{ .close_connection = index });
+        }
     }
 }
 
