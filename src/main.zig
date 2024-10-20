@@ -614,9 +614,8 @@ fn run(
                             }
                             try nextStepSSL(index, context, &ring);
                         } else {
+                            conn.non_ssl_write_bytes_pending += bytes_read;
                             try nextStepNonSSL(index, context, &ring);
-                            // TODO
-                            unreachable;
                         }
                     }
                 },
@@ -1179,6 +1178,31 @@ fn nextStepSSL(
     }
 }
 
+fn prepareNonSSLFileReaderOps(
+    index: usize,
+    context: ThreadContext,
+    file_reader_state: command.FileReaderState,
+    ring: *linux.IoUring,
+) !void {
+    const sqe = try ring.get_sqe();
+    switch (file_reader_state) {
+        .open_file => |info| {
+            sqe.prep_openat(context.directory_fd, info.path[0..], .{}, 0);
+            sqe.user_data = connections.encode(.{ .open_file = index });
+        },
+        .read_file => |info| {
+            const conn = &context.conns.connections[index];
+            const buf = &context.conns.ssl_buffers[index];
+            sqe.prep_read(info.handle, buf[conn.non_ssl_write_bytes_pending..], info.offset);
+            sqe.user_data = connections.encode(.{ .read_file = index });
+        },
+        .close_file => |handle| {
+            sqe.prep_close(handle);
+            sqe.user_data = connections.encode(.{ .close_file = index });
+        },
+    }
+}
+
 fn nextStepNonSSL(
     index: usize,
     context: ThreadContext,
@@ -1190,7 +1214,14 @@ fn nextStepNonSSL(
     const conn = &context.conns.connections[index];
     while (repeat) {
         repeat = false;
-        if (conn.writer_state) |writer_state| {
+        if (conn.file_reader_state) |file_reader| {
+            if (conn.non_ssl_read_bytes_pending > 0) {
+                // We have extra data
+                close = true;
+            } else {
+                prepareNonSSLFileReaderOps(index, context, file_reader, ring);
+            }
+        } else if (conn.writer_state) |writer_state| {
             if (conn.non_ssl_read_bytes_pending > 0) {
                 // We have extra data
                 close = true;
