@@ -844,7 +844,6 @@ fn closeGracefully(
         conns.connections[index].is_closing_gracefully = true;
         const engine = &conns.ssl_contexts[index].eng;
         ssl.br_ssl_engine_close(engine);
-        conns.connections[index].writer_state = null;
         try nextStepSSL(index, context, ring);
     } else {
         try prepareClose(ring, conns, index);
@@ -1174,11 +1173,18 @@ fn nextStepSSL(
             );
             repeat = true;
         } else if ((state & ssl.BR_SSL_RECVREC) > 0) {
-            if (conn.writer_state != null) {
-                std.log.err("Invalid state RECVREC with writer state {?}", .{conn.writer_state});
-                std.process.exit(1);
-            } else {
+            if (conn.is_closing_gracefully) {
                 try prepareReadSSL(ring, context.conns, index, engine);
+            } else {
+                if (conn.writer_state != null) {
+                    std.log.err("Invalid state RECVREC with writer state {?}", .{conn.writer_state});
+                    std.process.exit(1);
+                } else if (conn.file_reader_state != null) {
+                    std.log.err("Invalid state RECVREC with reader state {?}", .{conn.file_reader_state});
+                    std.process.exit(1);
+                } else {
+                    try prepareReadSSL(ring, context.conns, index, engine);
+                }
             }
         }
     }
