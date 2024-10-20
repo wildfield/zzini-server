@@ -574,13 +574,70 @@ fn run(
                         }
                     }
                 },
-                connections.IOOperationType.read_file => |_| {
-                    // TODO
-                    unreachable;
+                connections.IOOperationType.read_file => |index| {
+                    tracyMarkStart("read_file");
+                    defer {
+                        tracyMarkEnd("read_file");
+                    }
+                    std.log.debug("Event read_file", .{});
+                    if (cqe.res < 0) {
+                        const err = cqe.err();
+                        std.log.err("read_file error: {}", .{err});
+                        std.process.exit(1);
+                    } else {
+                        const bytes_read: usize = @intCast(cqe.res);
+                        const conn = &conns.connections[index];
+                        if (conn.is_ssl) {
+                            const engine = &conns.ssl_contexts[index].eng;
+                            ssl.br_ssl_engine_sendapp_ack(engine, bytes_read);
+                            switch (conn.file_reader_state.?) {
+                                .read_file => |info| {
+                                    const next_offset = info.offset + bytes_read;
+                                    if (next_offset > info.len) {
+                                        std.log.err("We've read too many bytes from a file. Server needs a restart", .{});
+                                        std.process.exit(1);
+                                    } else if (next_offset == info.len) {
+                                        conn.file_reader_state = .{ .close_file = info.handle };
+                                    } else {
+                                        conn.file_reader_state = .{ .read_file = .{
+                                            .handle = info.handle,
+                                            .len = info.len,
+                                            .offset = info.offset + bytes_read,
+                                        } };
+                                    }
+                                },
+                                else => {
+                                    std.log.err("Unexpected file_reader_state in read_file", .{});
+                                    std.process.exit(1);
+                                },
+                            }
+                            try nextStepSSL(index, context, &ring);
+                        } else {
+                            try nextStepNonSSL(index, context, &ring);
+                            // TODO
+                            unreachable;
+                        }
+                    }
                 },
-                connections.IOOperationType.close_file => |_| {
-                    // TODO
-                    unreachable;
+                connections.IOOperationType.close_file => |index| {
+                    tracyMarkStart("close_file");
+                    defer {
+                        tracyMarkEnd("close_file");
+                    }
+                    std.log.debug("Event close_file", .{});
+                    if (cqe.res < 0) {
+                        const err = cqe.err();
+                        std.log.err("close_file error: {}", .{err});
+                        std.process.exit(1);
+                    } else {
+                        const conn = &conns.connections[index];
+                        conn.file_reader_state = null;
+                        if (conn.is_ssl) {
+                            try nextStepSSL(index, context, &ring);
+                        } else {
+                            try nextStepNonSSL(index, context, &ring);
+                        }
+                    }
                 },
             }
         }
