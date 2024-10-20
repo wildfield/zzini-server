@@ -61,7 +61,7 @@ const CurrentArgument = enum {
 // Each connection can have at most 1 request
 // + at most 2 accept requests
 // However, sqe demands power of 2 entries
-pub const max_entries = max_connections << 1;
+pub const max_entries = max_connections << 2;
 
 pub fn main() !u8 {
     tracyMarkStart("main");
@@ -530,6 +530,46 @@ fn run(
                         std.log.debug("Got timeout", .{});
                     }
                 },
+                connections.IOOperationType.open_file => |index| {
+                    tracyMarkStart("open_file");
+                    defer {
+                        tracyMarkEnd("open_file");
+                    }
+                    std.log.debug("Event open_file", .{});
+                    if (cqe.res < 0) {
+                        const err = cqe.err();
+                        std.log.err("open_file error: {}", .{err});
+                        std.process.exit(1);
+                    } else {
+                        const handle: usize = @intCast(cqe.res);
+                        const conn = &conns.connections[index];
+                        switch (conn.file_reader_state) {
+                            .open_file => |info| {
+                                conn.file_reader_state = .{ .read_file = .{
+                                    .handle = handle,
+                                    .buffer_bytes_written = info.buffer_bytes_written,
+                                } };
+                            },
+                            else => {
+                                std.log.err("Unexpected file_reader_state in open_file", .{});
+                                std.process.exit(1);
+                            },
+                        }
+                        if (conn.is_ssl) {
+                            try nextStepSSL(index, context, &ring);
+                        } else {
+                            try nextStepNonSSL(index, context, &ring);
+                        }
+                    }
+                },
+                connections.IOOperationType.read_file => |_| {
+                    // TODO
+                    unreachable;
+                },
+                connections.IOOperationType.close_file => |_| {
+                    // TODO
+                    unreachable;
+                },
             }
         }
         tracyMarkEnd("cqe-loop");
@@ -545,6 +585,8 @@ const timeout = linux.kernel_timespec{ .tv_sec = config.timeout_sec, .tv_nsec = 
 const WriteBufferResult = struct {
     bytes_written: usize,
     should_flush: bool,
+    // Used only when we need to read a file, as opposed to reading from memory
+    filepath: ?[]const u8 = null,
 };
 
 fn writeResponseToBuffer(
@@ -615,18 +657,45 @@ fn writeResponseToBuffer(
                 bytes_written = try stream.getPos();
             }
             var bytes_written_output: usize = undefined;
+            var should_flush = true;
             if (!cmd_params.is_head_method) {
-                const capacity_left = buf.len - bytes_written;
                 const len_to_read = info.len - cmd_params.file_bytes_written;
+                const capacity_left = buf.len - bytes_written;
                 const len_to_write = @min(capacity_left, len_to_read);
-                const data = switch (info.data) {
-                    .memory => |memory_data| memory_data,
-                };
-                @memcpy(
-                    buf[bytes_written .. bytes_written + len_to_write],
-                    data[cmd_params.file_bytes_written .. cmd_params.file_bytes_written + len_to_write],
-                );
-                bytes_written_output = bytes_written + len_to_write;
+                var filepath: ?[]const u8 = null;
+                switch (info.data) {
+                    .memory => |data| {
+                        @memcpy(
+                            buf[bytes_written .. bytes_written + len_to_write],
+                            data[cmd_params.file_bytes_written .. cmd_params.file_bytes_written + len_to_write],
+                        );
+                        bytes_written_output = bytes_written + len_to_write;
+                    },
+                    .filesystem => |path| {
+                        should_flush = false;
+                        filepath = path;
+                        // if (context.conns.connections[index].file_reader_state) |reader| {
+                        //     switch (reader) {
+                        //         .standby => |handle| {
+                        //             context.conns.connections[index].file_reader_state = .{ .read_file = .{
+                        //                 .handle = handle,
+                        //                 .buffer_bytes_written = bytes_written,
+                        //             } };
+                        //         },
+                        //         else => {
+                        //             std.log.err("Unexpected file reader state", .{});
+                        //             std.process.exit(1);
+                        //         },
+                        //     }
+                        // } else {
+                        //     context.conns.connections[index].file_reader_state = .{ .open_file = .{
+                        //         .file_path = path,
+                        //         .buffer_bytes_written = bytes_written,
+                        //     } };
+                        // }
+                        // bytes_written_output = bytes_written;
+                    },
+                }
                 if (len_to_write < len_to_read) {
                     std.log.debug("Index {} smaller write", .{index});
                     context.conns.connections[index].writer_state = .{
@@ -643,7 +712,7 @@ fn writeResponseToBuffer(
                 bytes_written_output = bytes_written;
                 context.conns.connections[index].writer_state = null;
             }
-            return .{ .bytes_written = bytes_written_output, .should_flush = true };
+            return .{ .bytes_written = bytes_written_output, .should_flush = should_flush };
         },
         .err => |err| {
             _ = try writer.write(err.statusLine());
@@ -970,7 +1039,10 @@ fn nextStepSSL(
                     repeat = true;
                 }
             }
-        } else if ((state & ssl.BR_SSL_SENDAPP) > 0 and conn.writer_state != null) {
+        } else if ((state & ssl.BR_SSL_SENDAPP) > 0 and
+            conn.file_reader_state != null and
+            conn.file_reader_state.? != .standby)
+        {} else if ((state & ssl.BR_SSL_SENDAPP) > 0 and conn.writer_state != null) {
             const writer_state = conn.writer_state.?;
             try processSendApp(
                 index,

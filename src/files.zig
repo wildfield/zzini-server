@@ -3,14 +3,14 @@ const config = @import("config.zig");
 
 pub const FileDataType = enum(u1) {
     memory,
-    // filesystem,
+    filesystem,
 };
 
 pub const FileData = union(FileDataType) {
     // Memory contains file contents
     memory: []const u8,
     // File system contains file path
-    // filesystem: []const u8,
+    filesystem: []const u8,
 };
 
 pub const FileInfo = struct {
