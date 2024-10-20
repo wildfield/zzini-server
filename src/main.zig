@@ -18,7 +18,7 @@ const c = @cImport({
 
 // Global options. This sets global log level to info
 pub const std_options = .{
-    .log_level = .info,
+    .log_level = .debug,
 };
 
 // const tracy = @cImport({
@@ -590,6 +590,7 @@ fn run(
                         if (conn.is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_sendapp_ack(engine, bytes_read);
+                            ssl.br_ssl_engine_flush(engine, 0);
                             switch (conn.file_reader_state.?) {
                                 .read_file => |info| {
                                     const next_offset = info.offset + bytes_read;
@@ -602,7 +603,7 @@ fn run(
                                         conn.file_reader_state = .{ .read_file = .{
                                             .handle = info.handle,
                                             .len = info.len,
-                                            .offset = info.offset + bytes_read,
+                                            .offset = next_offset,
                                         } };
                                     }
                                 },
@@ -698,7 +699,6 @@ fn writeResponseToBuffer(
     switch (cmd_params.data) {
         .file_idx => |file_idx| {
             const info = context.file_storage[file_idx];
-            var bytes_written: usize = 0;
             // We assume there's space for at least a header
             if (!cmd_params.was_status_written) {
                 _ = try writer.write(header_status);
@@ -721,8 +721,8 @@ fn writeResponseToBuffer(
                     _ = try std.fmt.format(writer, "ETag: {s}\r\n", .{info.hash});
                 }
                 _ = try writer.write("\r\n");
-                bytes_written = try stream.getPos();
             }
+            const bytes_written = try stream.getPos();
             var bytes_written_output: usize = undefined;
             var should_flush = true;
             if (!cmd_params.is_head_method) {
@@ -750,6 +750,7 @@ fn writeResponseToBuffer(
                         }
                     },
                     .filesystem => |path| {
+                        bytes_written_output = bytes_written;
                         should_flush = false;
                         context.conns.connections[index].writer_state = null;
                         context.conns.connections[index].file_reader_state = .{ .open_file = .{
@@ -1051,7 +1052,7 @@ fn prepareSSLFileReaderOps(
     const sqe = try ring.get_sqe();
     switch (file_reader_state) {
         .open_file => |info| {
-            sqe.prep_openat(context.directory_fd, info.path[0.. :0], .{}, 0);
+            sqe.prep_openat(context.directory_fd, info.path[0..], .{}, 0);
             sqe.user_data = connections.encode(.{ .open_file = index });
         },
         .read_file => |info| {

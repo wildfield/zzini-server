@@ -62,7 +62,7 @@ pub const FileReaderStateType = enum {
 };
 
 pub const OpenFileState = struct {
-    path: []const u8,
+    path: [:0]const u8,
     len: usize,
 };
 

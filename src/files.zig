@@ -10,7 +10,7 @@ pub const FileData = union(FileDataType) {
     // Memory contains file contents
     memory: []const u8,
     // File system contains file path
-    filesystem: []const u8,
+    filesystem: [:0]const u8,
 };
 
 pub const FileInfo = struct {
@@ -117,7 +117,7 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                         const should_compress =
                             (mime.len < binary_postfix.len or !std.mem.eql(u8, binary_postfix, mime[mime.len - binary_postfix.len .. mime.len]));
                         var file_data_storage: ?[]u8 = null;
-                        const file_len = (try file_handle.stat()).size;
+                        var file_len: usize = undefined;
                         var hash: u64 = undefined;
                         if (should_compress) {
                             var file_cache_data_stream = std.io.fixedBufferStream(file_cache_buffer);
@@ -129,8 +129,10 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                                 continue;
                             }
                             file_data_storage = try output_allocator.dupe(u8, data_written);
+                            file_len = file_data_storage.?.len;
                             hash = std.hash.XxHash64.hash(seed, file_data_storage.?);
                         } else {
+                            file_len = (try file_handle.stat()).size;
                             var hasher = std.hash.XxHash64.init(seed);
                             var buffer: [1024 * 16]u8 = undefined;
                             while (true) {
@@ -152,9 +154,9 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                             .data = if (file_data_storage) |storage|
                                 .{ .memory = storage }
                             else blk: {
-                                var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                                var realpath_buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
                                 const realpath = try parent_folder.realpath(item.name, &realpath_buffer);
-                                break :blk .{ .filesystem = try output_allocator.dupe(u8, realpath) };
+                                break :blk .{ .filesystem = try output_allocator.dupeZ(u8, realpath) };
                             },
                             .hash = encoded_hash,
                             .mime = mime,
