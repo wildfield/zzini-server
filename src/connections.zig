@@ -9,7 +9,13 @@ const config = @import("config.zig");
 const buffer_size = ssl.BR_SSL_BUFSIZE_MONO;
 pub const max_connections = 1 << config.index_bits;
 
-pub const IOOperationType = enum(u3) { accept, read, write, close, timeout };
+pub const IOOperationType = enum(u3) {
+    accept,
+    read,
+    write,
+    close_connection,
+    timeout,
+};
 
 // All operations except for accept also contain a connection index
 pub const IOOperation = union(IOOperationType) {
@@ -17,7 +23,7 @@ pub const IOOperation = union(IOOperationType) {
     accept: bool,
     read: usize,
     write: usize,
-    close: usize,
+    close_connection: usize,
     timeout: void,
 };
 
@@ -158,8 +164,8 @@ pub fn encode(op: IOOperation) u64 {
             const op_code: u64 = 0;
             return (op_code << config.index_bits) | @intFromBool(encrypted);
         },
-        IOOperationType.close => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close));
+        IOOperationType.close_connection => |index| {
+            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close_connection));
             return (op_code << config.index_bits) | index;
         },
         IOOperationType.read => |index| {
@@ -185,7 +191,7 @@ pub fn decode(op: u64) IOOperation {
     const op_type: IOOperationType = @enumFromInt(op_type_code);
     return switch (op_type) {
         IOOperationType.accept => IOOperation{ .accept = if (index == 0) false else true },
-        IOOperationType.close => IOOperation{ .close = index },
+        IOOperationType.close_connection => IOOperation{ .close_connection = index },
         IOOperationType.read => IOOperation{ .read = index },
         IOOperationType.write => IOOperation{ .write = index },
         IOOperationType.timeout => IOOperation.timeout,

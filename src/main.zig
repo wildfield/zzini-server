@@ -503,7 +503,7 @@ fn run(
                     }
                     tracyMarkEnd("write");
                 },
-                connections.IOOperationType.close => |index| {
+                connections.IOOperationType.close_connection => |index| {
                     std.log.debug("Event close", .{});
                     if (conns.busy[index]) {
                         conns.busy_connections_count -= 1;
@@ -781,7 +781,7 @@ fn prepareClose(ring: *linux.IoUring, conns: *connections.Connections, index: us
         conns.connections[index].is_closing = true;
         const sqe = try ring.get_sqe();
         sqe.prep_close(conns.connections[index].socket);
-        sqe.user_data = connections.encode(.{ .close = index });
+        sqe.user_data = connections.encode(.{ .close_connection = index });
     }
 }
 
