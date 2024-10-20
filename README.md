@@ -1,6 +1,6 @@
 # Summary
 
-A simple static HTTP 1.1 + TLS 1.2 server that loads all files into ram before serving
+A simple static HTTP 1.1 + TLS 1.2 server that loads some files into RAM before serving
 
 ## Disclaimer
 
