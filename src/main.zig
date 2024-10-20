@@ -100,17 +100,31 @@ pub fn main() !u8 {
 
     var key_decoder: ssl.br_skey_decoder_context = undefined;
 
+    var directory_fd: ?std.posix.fd_t = null;
+    defer {
+        if (directory_fd) |fd| {
+            std.posix.close(fd);
+        }
+    }
+
     while (args.next()) |filename| {
         switch (current_arg) {
             .done => {
-                // We should never reach this because the server setup should return on completion
-                std.log.err("Reached done state in the arg parsing", .{});
+                std.log.err("Too many arguments passed", .{});
                 return 1;
             },
             .hostname => {
                 hostname = filename;
             },
             .public_folder => {
+                // Get directory file handle
+                {
+                    errdefer {
+                        std.log.err("Failed to open working directory", .{});
+                    }
+                    directory_fd = try posix.open(filename, .{ .DIRECTORY = true }, 0);
+                }
+
                 // Read files
                 const load_files_result = try files.loadFiles(allocator, filename);
                 file_index_map = load_files_result.file_index_map;
@@ -155,117 +169,119 @@ pub fn main() !u8 {
         }
 
         current_arg = current_arg.next();
-        if (current_arg == .done) {
-            // We are done working with arguments, start server
-            // Key setup
-            var private_key: keys.PrivateKey = undefined;
-            const key_type = ssl.br_skey_decoder_key_type(&key_decoder);
-            const ec_key: ?*const ssl.br_ec_private_key = ssl.br_skey_decoder_get_ec(&key_decoder);
-            const rsa_key: ?*const ssl.br_rsa_private_key = ssl.br_skey_decoder_get_rsa(&key_decoder);
-            if (ec_key) |ec_key_unwrapped| {
-                private_key = .{ .ec = .{ .key = ec_key_unwrapped, .key_type = key_type } };
-            } else if (rsa_key) |rsa_key_unwrapped| {
-                private_key = .{ .rsa = rsa_key_unwrapped };
-            } else {
-                std.log.err("Unsupported key type: {}", .{key_type});
-                return 1;
-            }
+    }
 
-            const key = keys.Keys{
-                .certs = cert_buffers.?,
-                .private_key = private_key,
-            };
-
-            // Network setup
-            // SSL socket
-            const sock_ssl = try posix.socket(posix.AF.INET6, posix.SOCK.STREAM, 0);
-            defer {
-                posix.close(sock_ssl);
-            }
-
-            {
-                errdefer {
-                    std.log.err("Failed to setup SSL listener on port {}", .{config.ssl_port});
-                }
-
-                try posix.setsockopt(sock_ssl, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-                try posix.setsockopt(sock_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
-                const address_ssl = try std.net.Address.parseIp6("::", config.ssl_port);
-                try posix.bind(sock_ssl, &address_ssl.any, address_ssl.getOsSockLen());
-
-                try posix.setsockopt(
-                    sock_ssl,
-                    posix.IPPROTO.TCP,
-                    std.os.linux.TCP.NODELAY,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-
-                try posix.listen(sock_ssl, max_connections);
-            }
-
-            // Non-ssl socket
-            const sock_non_ssl = try posix.socket(posix.AF.INET6, posix.SOCK.STREAM, 0);
-            defer {
-                posix.close(sock_non_ssl);
-            }
-
-            {
-                errdefer {
-                    std.log.err("Failed to setup non-SSL listener on port {}", .{config.non_ssl_port});
-                }
-
-                try posix.setsockopt(sock_non_ssl, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-                try posix.setsockopt(sock_non_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
-                const address_non_ssl = try std.net.Address.parseIp6("::", config.non_ssl_port);
-                try posix.bind(sock_non_ssl, &address_non_ssl.any, address_non_ssl.getOsSockLen());
-
-                try posix.setsockopt(
-                    sock_non_ssl,
-                    posix.IPPROTO.TCP,
-                    std.os.linux.TCP.NODELAY,
-                    &std.mem.toBytes(@as(c_int, 1)),
-                );
-
-                try posix.listen(sock_non_ssl, max_connections);
-            }
-
-            std.log.info("Starting server at non-SSL port {}, SSL port {}", .{ config.non_ssl_port, config.ssl_port });
-
-            var thread_num: usize = config.thread_num;
-            if (thread_num == 0) {
-                const cpus = try std.posix.sched_getaffinity(0);
-                var cpu_count = std.posix.CPU_COUNT(cpus);
-                if (cpu_count == 0) {
-                    cpu_count = 1;
-                }
-                thread_num = cpu_count;
-            }
-            std.log.info("Thread count: {}", .{thread_num});
-
-            // Start server
-            if (!config.dry_run) {
-                var threads = try std.ArrayList(std.Thread).initCapacity(allocator, thread_num);
-                defer {
-                    threads.deinit();
-                }
-                for (0..thread_num) |_| {
-                    const spawn_config = std.Thread.SpawnConfig{};
-                    const thread = try std.Thread.spawn(spawn_config, run, .{
-                        sock_ssl,
-                        sock_non_ssl,
-                        file_index_map.?,
-                        file_storage.?,
-                        key,
-                        hostname,
-                    });
-                    try threads.append(thread);
-                }
-                for (threads.items) |thread| {
-                    std.Thread.join(thread);
-                }
-            }
-            return 0;
+    if (current_arg == .done) {
+        // We are done working with arguments, start server
+        // Key setup
+        var private_key: keys.PrivateKey = undefined;
+        const key_type = ssl.br_skey_decoder_key_type(&key_decoder);
+        const ec_key: ?*const ssl.br_ec_private_key = ssl.br_skey_decoder_get_ec(&key_decoder);
+        const rsa_key: ?*const ssl.br_rsa_private_key = ssl.br_skey_decoder_get_rsa(&key_decoder);
+        if (ec_key) |ec_key_unwrapped| {
+            private_key = .{ .ec = .{ .key = ec_key_unwrapped, .key_type = key_type } };
+        } else if (rsa_key) |rsa_key_unwrapped| {
+            private_key = .{ .rsa = rsa_key_unwrapped };
+        } else {
+            std.log.err("Unsupported key type: {}", .{key_type});
+            return 1;
         }
+
+        const key = keys.Keys{
+            .certs = cert_buffers.?,
+            .private_key = private_key,
+        };
+
+        // Network setup
+        // SSL socket
+        const sock_ssl = try posix.socket(posix.AF.INET6, posix.SOCK.STREAM, 0);
+        defer {
+            posix.close(sock_ssl);
+        }
+
+        {
+            errdefer {
+                std.log.err("Failed to setup SSL listener on port {}", .{config.ssl_port});
+            }
+
+            try posix.setsockopt(sock_ssl, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.setsockopt(sock_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
+            const address_ssl = try std.net.Address.parseIp6("::", config.ssl_port);
+            try posix.bind(sock_ssl, &address_ssl.any, address_ssl.getOsSockLen());
+
+            try posix.setsockopt(
+                sock_ssl,
+                posix.IPPROTO.TCP,
+                std.os.linux.TCP.NODELAY,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
+
+            try posix.listen(sock_ssl, max_connections);
+        }
+
+        // Non-ssl socket
+        const sock_non_ssl = try posix.socket(posix.AF.INET6, posix.SOCK.STREAM, 0);
+        defer {
+            posix.close(sock_non_ssl);
+        }
+
+        {
+            errdefer {
+                std.log.err("Failed to setup non-SSL listener on port {}", .{config.non_ssl_port});
+            }
+
+            try posix.setsockopt(sock_non_ssl, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.setsockopt(sock_non_ssl, posix.IPPROTO.IPV6, std.os.linux.IPV6.V6ONLY, &std.mem.toBytes(@as(c_int, 0)));
+            const address_non_ssl = try std.net.Address.parseIp6("::", config.non_ssl_port);
+            try posix.bind(sock_non_ssl, &address_non_ssl.any, address_non_ssl.getOsSockLen());
+
+            try posix.setsockopt(
+                sock_non_ssl,
+                posix.IPPROTO.TCP,
+                std.os.linux.TCP.NODELAY,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
+
+            try posix.listen(sock_non_ssl, max_connections);
+        }
+
+        std.log.info("Starting server at non-SSL port {}, SSL port {}", .{ config.non_ssl_port, config.ssl_port });
+
+        var thread_num: usize = config.thread_num;
+        if (thread_num == 0) {
+            const cpus = try std.posix.sched_getaffinity(0);
+            var cpu_count = std.posix.CPU_COUNT(cpus);
+            if (cpu_count == 0) {
+                cpu_count = 1;
+            }
+            thread_num = cpu_count;
+        }
+        std.log.info("Thread count: {}", .{thread_num});
+
+        // Start server
+        if (!config.dry_run) {
+            var threads = try std.ArrayList(std.Thread).initCapacity(allocator, thread_num);
+            defer {
+                threads.deinit();
+            }
+            for (0..thread_num) |_| {
+                const spawn_config = std.Thread.SpawnConfig{};
+                const thread = try std.Thread.spawn(spawn_config, run, .{
+                    sock_ssl,
+                    sock_non_ssl,
+                    file_index_map.?,
+                    file_storage.?,
+                    key,
+                    hostname,
+                    directory_fd.?,
+                });
+                try threads.append(thread);
+            }
+            for (threads.items) |thread| {
+                std.Thread.join(thread);
+            }
+        }
+        return 0;
     } else {
         std.log.err(
             "Usage: {s} <hostname> <folder to serve> <certificate file> <certificate key file> \n e.g. example.org ~/public ~/keys/my_cert.cert ~/keys/my_key.key",
@@ -282,6 +298,7 @@ const ThreadContext = struct {
     current_date: *?[]const u8,
     current_date_buf: []u8,
     hostname: []const u8,
+    directory_fd: std.posix.fd_t,
 };
 
 fn run(
@@ -291,6 +308,7 @@ fn run(
     file_storage: []const files.FileInfo,
     key: keys.Keys,
     hostname: []const u8,
+    directory_fd: std.posix.fd_t,
 ) !void {
     var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer {
@@ -330,14 +348,7 @@ fn run(
     var current_date_buf: [128]u8 = undefined;
     var current_date: ?[]const u8 = null;
 
-    const context = ThreadContext{
-        .conns = &conns,
-        .file_index_map = file_index_map,
-        .file_storage = file_storage,
-        .current_date_buf = &current_date_buf,
-        .current_date = &current_date,
-        .hostname = hostname,
-    };
+    const context = ThreadContext{ .conns = &conns, .file_index_map = file_index_map, .file_storage = file_storage, .current_date_buf = &current_date_buf, .current_date = &current_date, .hostname = hostname, .directory_fd = directory_fd };
 
     while (true) {
         current_date = null;
@@ -541,13 +552,14 @@ fn run(
                         std.log.err("open_file error: {}", .{err});
                         std.process.exit(1);
                     } else {
-                        const handle: usize = @intCast(cqe.res);
+                        const handle: std.posix.fd_t = @intCast(cqe.res);
                         const conn = &conns.connections[index];
-                        switch (conn.file_reader_state) {
+                        switch (conn.file_reader_state.?) {
                             .open_file => |info| {
                                 conn.file_reader_state = .{ .read_file = .{
                                     .handle = handle,
-                                    .buffer_bytes_written = info.buffer_bytes_written,
+                                    .len = info.len,
+                                    .offset = 0,
                                 } };
                             },
                             else => {
@@ -585,8 +597,6 @@ const timeout = linux.kernel_timespec{ .tv_sec = config.timeout_sec, .tv_nsec = 
 const WriteBufferResult = struct {
     bytes_written: usize,
     should_flush: bool,
-    // Used only when we need to read a file, as opposed to reading from memory
-    filepath: ?[]const u8 = null,
 };
 
 fn writeResponseToBuffer(
@@ -662,7 +672,6 @@ fn writeResponseToBuffer(
                 const len_to_read = info.len - cmd_params.file_bytes_written;
                 const capacity_left = buf.len - bytes_written;
                 const len_to_write = @min(capacity_left, len_to_read);
-                var filepath: ?[]const u8 = null;
                 switch (info.data) {
                     .memory => |data| {
                         @memcpy(
@@ -670,49 +679,36 @@ fn writeResponseToBuffer(
                             data[cmd_params.file_bytes_written .. cmd_params.file_bytes_written + len_to_write],
                         );
                         bytes_written_output = bytes_written + len_to_write;
+                        if (len_to_write < len_to_read) {
+                            std.log.debug("Index {} smaller write", .{index});
+                            context.conns.connections[index].writer_state = .{
+                                .index = index,
+                                .data = .{ .file_idx = file_idx },
+                                .was_status_written = true,
+                                .was_header_written = true,
+                                .file_bytes_written = cmd_params.file_bytes_written + len_to_write,
+                            };
+                        } else {
+                            context.conns.connections[index].writer_state = null;
+                        }
                     },
                     .filesystem => |path| {
                         should_flush = false;
-                        filepath = path;
-                        // if (context.conns.connections[index].file_reader_state) |reader| {
-                        //     switch (reader) {
-                        //         .standby => |handle| {
-                        //             context.conns.connections[index].file_reader_state = .{ .read_file = .{
-                        //                 .handle = handle,
-                        //                 .buffer_bytes_written = bytes_written,
-                        //             } };
-                        //         },
-                        //         else => {
-                        //             std.log.err("Unexpected file reader state", .{});
-                        //             std.process.exit(1);
-                        //         },
-                        //     }
-                        // } else {
-                        //     context.conns.connections[index].file_reader_state = .{ .open_file = .{
-                        //         .file_path = path,
-                        //         .buffer_bytes_written = bytes_written,
-                        //     } };
-                        // }
-                        // bytes_written_output = bytes_written;
+                        context.conns.connections[index].writer_state = null;
+                        context.conns.connections[index].file_reader_state = .{ .open_file = .{
+                            .path = path,
+                            .len = info.len,
+                        } };
                     },
-                }
-                if (len_to_write < len_to_read) {
-                    std.log.debug("Index {} smaller write", .{index});
-                    context.conns.connections[index].writer_state = .{
-                        .index = index,
-                        .data = .{ .file_idx = file_idx },
-                        .was_status_written = true,
-                        .was_header_written = true,
-                        .file_bytes_written = cmd_params.file_bytes_written + len_to_write,
-                    };
-                } else {
-                    context.conns.connections[index].writer_state = null;
                 }
             } else {
                 bytes_written_output = bytes_written;
                 context.conns.connections[index].writer_state = null;
             }
-            return .{ .bytes_written = bytes_written_output, .should_flush = should_flush };
+            return .{
+                .bytes_written = bytes_written_output,
+                .should_flush = should_flush,
+            };
         },
         .err => |err| {
             _ = try writer.write(err.statusLine());
@@ -988,6 +984,32 @@ fn processParsingOutput(
     }
 }
 
+fn prepareSSLFileReaderOps(
+    index: usize,
+    context: ThreadContext,
+    engine: *ssl.br_ssl_engine_context,
+    file_reader_state: command.FileReaderState,
+    ring: *linux.IoUring,
+) !void {
+    const sqe = try ring.get_sqe();
+    switch (file_reader_state) {
+        .open_file => |info| {
+            sqe.prep_openat(context.directory_fd, info.path[0.. :0], .{}, 0);
+            sqe.user_data = connections.encode(.{ .open_file = index });
+        },
+        .read_file => |info| {
+            var capacity: usize = undefined;
+            const buf = ssl.br_ssl_engine_sendapp_buf(engine, &capacity);
+            sqe.prep_read(info.handle, buf[0..capacity], info.offset);
+            sqe.user_data = connections.encode(.{ .read_file = index });
+        },
+        .close_file => |handle| {
+            sqe.prep_close(handle);
+            sqe.user_data = connections.encode(.{ .close_file = index });
+        },
+    }
+}
+
 fn processSendApp(
     index: usize,
     context: ThreadContext,
@@ -1039,10 +1061,16 @@ fn nextStepSSL(
                     repeat = true;
                 }
             }
-        } else if ((state & ssl.BR_SSL_SENDAPP) > 0 and
-            conn.file_reader_state != null and
-            conn.file_reader_state.? != .standby)
-        {} else if ((state & ssl.BR_SSL_SENDAPP) > 0 and conn.writer_state != null) {
+        } else if ((state & ssl.BR_SSL_SENDAPP) > 0 and conn.file_reader_state != null) {
+            const file_reader_state = conn.file_reader_state.?;
+            try prepareSSLFileReaderOps(
+                index,
+                context,
+                engine,
+                file_reader_state,
+                ring,
+            );
+        } else if ((state & ssl.BR_SSL_SENDAPP) > 0 and conn.writer_state != null) {
             const writer_state = conn.writer_state.?;
             try processSendApp(
                 index,
