@@ -9,7 +9,7 @@ const config = @import("config.zig");
 const buffer_size = ssl.BR_SSL_BUFSIZE_MONO;
 pub const max_connections = 1 << config.index_bits;
 
-pub const IOOperationType = enum(u4) {
+pub const IOOperationType = enum(u3) {
     accept,
     read,
     write,
