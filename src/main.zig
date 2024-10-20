@@ -100,12 +100,7 @@ pub fn main() !u8 {
 
     var key_decoder: ssl.br_skey_decoder_context = undefined;
 
-    var directory_fd: ?std.posix.fd_t = null;
-    defer {
-        if (directory_fd) |fd| {
-            std.posix.close(fd);
-        }
-    }
+    var directory_path: ?[]const u8 = null;
 
     while (args.next()) |filename| {
         switch (current_arg) {
@@ -122,7 +117,7 @@ pub fn main() !u8 {
                     errdefer {
                         std.log.err("Failed to open working directory", .{});
                     }
-                    directory_fd = try posix.open(filename, .{ .DIRECTORY = true }, 0);
+                    directory_path = filename;
                 }
 
                 // Read files
@@ -273,7 +268,7 @@ pub fn main() !u8 {
                     file_storage.?,
                     key,
                     hostname,
-                    directory_fd.?,
+                    directory_path.?,
                 });
                 try threads.append(thread);
             }
@@ -308,7 +303,7 @@ fn run(
     file_storage: []const files.FileInfo,
     key: keys.Keys,
     hostname: []const u8,
-    directory_fd: std.posix.fd_t,
+    directory_path: []const u8,
 ) !void {
     var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer {
@@ -348,7 +343,20 @@ fn run(
     var current_date_buf: [128]u8 = undefined;
     var current_date: ?[]const u8 = null;
 
-    const context = ThreadContext{ .conns = &conns, .file_index_map = file_index_map, .file_storage = file_storage, .current_date_buf = &current_date_buf, .current_date = &current_date, .hostname = hostname, .directory_fd = directory_fd };
+    const directory_fd = try posix.open(directory_path, .{ .DIRECTORY = true }, 0);
+    defer {
+        posix.close(directory_fd);
+    }
+
+    const context = ThreadContext{
+        .conns = &conns,
+        .file_index_map = file_index_map,
+        .file_storage = file_storage,
+        .current_date_buf = &current_date_buf,
+        .current_date = &current_date,
+        .hostname = hostname,
+        .directory_fd = directory_fd,
+    };
 
     while (true) {
         current_date = null;
@@ -715,7 +723,7 @@ fn writeResponseToBuffer(
                 _ = try writer.write(header_keepalive);
                 _ = try writer.write(header_cache);
                 if (!config.allow_insecure_http) {
-                    _ = try writer.write(header_sts);
+                    // _ = try writer.write(header_sts);
                 }
                 if (info.is_compressed) {
                     _ = try writer.write(header_encoding);
