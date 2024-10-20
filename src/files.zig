@@ -1,11 +1,24 @@
 const std = @import("std");
 const config = @import("config.zig");
 
+pub const FileDataType = enum(u1) {
+    memory,
+    // filesystem,
+};
+
+pub const FileData = union(FileDataType) {
+    // Memory contains file contents
+    memory: []const u8,
+    // File system contains file path
+    // filesystem: []const u8,
+};
+
 pub const FileInfo = struct {
-    data: []const u8,
+    data: FileData,
     hash: []const u8,
     mime: []const u8,
     is_compressed: bool,
+    len: usize,
 };
 
 pub const FileIndexMap = std.StringHashMap(usize);
@@ -129,10 +142,11 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                         const http_path = try output_allocator.dupe(u8, item.http_path);
                         std.log.debug("File name {s} http path {s}", .{ item.name, item.http_path });
                         const file_info = FileInfo{
-                            .data = file_data_storage,
+                            .data = .{ .memory = file_data_storage },
                             .hash = encoded_hash,
                             .mime = mime,
                             .is_compressed = should_compress,
+                            .len = file_data_storage.len,
                         };
                         try array_file_storage.append(file_info);
                         try file_index_map.put(http_path, array_file_storage.items.len - 1);

@@ -607,7 +607,7 @@ fn writeResponseToBuffer(
                     _ = try writer.write(header_encoding);
                 }
                 _ = try std.fmt.format(writer, "Content-Type: {s}\r\n", .{info.mime});
-                _ = try std.fmt.format(writer, "Content-Length: {}\r\n", .{info.data.len});
+                _ = try std.fmt.format(writer, "Content-Length: {}\r\n", .{info.len});
                 if (cmd_params.should_add_etag) {
                     _ = try std.fmt.format(writer, "ETag: {s}\r\n", .{info.hash});
                 }
@@ -617,11 +617,14 @@ fn writeResponseToBuffer(
             var bytes_written_output: usize = undefined;
             if (!cmd_params.is_head_method) {
                 const capacity_left = buf.len - bytes_written;
-                const len_to_read = info.data.len - cmd_params.file_bytes_written;
+                const len_to_read = info.len - cmd_params.file_bytes_written;
                 const len_to_write = @min(capacity_left, len_to_read);
+                const data = switch (info.data) {
+                    .memory => |memory_data| memory_data,
+                };
                 @memcpy(
                     buf[bytes_written .. bytes_written + len_to_write],
-                    info.data[cmd_params.file_bytes_written .. cmd_params.file_bytes_written + len_to_write],
+                    data[cmd_params.file_bytes_written .. cmd_params.file_bytes_written + len_to_write],
                 );
                 bytes_written_output = bytes_written + len_to_write;
                 if (len_to_write < len_to_read) {
