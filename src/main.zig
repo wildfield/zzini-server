@@ -18,7 +18,7 @@ const c = @cImport({
 
 // Global options. This sets global log level to info
 pub const std_options = .{
-    .log_level = .info,
+    .log_level = .debug,
 };
 
 // const tracy = @cImport({
@@ -100,7 +100,12 @@ pub fn main() !u8 {
 
     var key_decoder: ssl.br_skey_decoder_context = undefined;
 
-    var directory_path: ?[]const u8 = null;
+    var directory_fd: ?std.posix.fd_t = null;
+    defer {
+        if (directory_fd) |fd| {
+            std.posix.close(fd);
+        }
+    }
 
     while (args.next()) |filename| {
         switch (current_arg) {
@@ -117,7 +122,7 @@ pub fn main() !u8 {
                     errdefer {
                         std.log.err("Failed to open working directory", .{});
                     }
-                    directory_path = filename;
+                    directory_fd = try posix.open(filename, .{ .DIRECTORY = true }, 0);
                 }
 
                 // Read files
@@ -268,7 +273,7 @@ pub fn main() !u8 {
                     file_storage.?,
                     key,
                     hostname,
-                    directory_path.?,
+                    directory_fd.?,
                 });
                 try threads.append(thread);
             }
@@ -303,7 +308,7 @@ fn run(
     file_storage: []const files.FileInfo,
     key: keys.Keys,
     hostname: []const u8,
-    directory_path: []const u8,
+    directory_fd: std.posix.fd_t,
 ) !void {
     var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer {
@@ -342,11 +347,6 @@ fn run(
 
     var current_date_buf: [128]u8 = undefined;
     var current_date: ?[]const u8 = null;
-
-    const directory_fd = try posix.open(directory_path, .{ .DIRECTORY = true }, 0);
-    defer {
-        posix.close(directory_fd);
-    }
 
     const context = ThreadContext{
         .conns = &conns,

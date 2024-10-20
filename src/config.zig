@@ -12,7 +12,7 @@ pub const cache_max_age = 3600;
 pub const max_compressed_file_size: usize = 8 * 1024 * 1024;
 
 // Total size for compressed files. If compressed files exceed this value, the server won't start
-// Compressable files are determined by checking whether charset is binary
+// Compressible files are determined by checking whether charset is binary
 pub const total_cache_size: usize = 128 * 1024 * 1024;
 
 // Port for non SSL socket

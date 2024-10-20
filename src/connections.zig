@@ -9,7 +9,7 @@ const config = @import("config.zig");
 const buffer_size = ssl.BR_SSL_BUFSIZE_MONO;
 pub const max_connections = 1 << config.index_bits;
 
-pub const IOOperationType = enum(u3) {
+pub const IOOperationType = enum(u4) {
     accept,
     read,
     write,
@@ -187,17 +187,17 @@ pub fn encode(op: IOOperation) u64 {
             const op_code: u64 = @intCast(@intFromEnum(IOOperationType.timeout));
             return (op_code << config.index_bits);
         },
-        IOOperationType.open_file => {
+        IOOperationType.open_file => |index| {
             const op_code: u64 = @intCast(@intFromEnum(IOOperationType.open_file));
-            return (op_code << config.index_bits);
+            return (op_code << config.index_bits) | index;
         },
-        IOOperationType.read_file => {
+        IOOperationType.read_file => |index| {
             const op_code: u64 = @intCast(@intFromEnum(IOOperationType.read_file));
-            return (op_code << config.index_bits);
+            return (op_code << config.index_bits) | index;
         },
-        IOOperationType.close_file => {
+        IOOperationType.close_file => |index| {
             const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close_file));
-            return (op_code << config.index_bits);
+            return (op_code << config.index_bits) | index;
         },
     };
 }
