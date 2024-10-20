@@ -723,7 +723,7 @@ fn writeResponseToBuffer(
                 _ = try writer.write(header_keepalive);
                 _ = try writer.write(header_cache);
                 if (!config.allow_insecure_http) {
-                    // _ = try writer.write(header_sts);
+                    _ = try writer.write(header_sts);
                 }
                 if (info.is_compressed) {
                     _ = try writer.write(header_encoding);
