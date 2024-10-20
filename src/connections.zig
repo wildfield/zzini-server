@@ -9,7 +9,16 @@ const config = @import("config.zig");
 const buffer_size = ssl.BR_SSL_BUFSIZE_MONO;
 pub const max_connections = 1 << config.index_bits;
 
-pub const IOOperationType = enum(u3) { accept, read, write, close, timeout };
+pub const IOOperationType = enum(u3) {
+    accept,
+    read,
+    write,
+    close_connection,
+    timeout,
+    open_file,
+    read_file,
+    close_file,
+};
 
 // All operations except for accept also contain a connection index
 pub const IOOperation = union(IOOperationType) {
@@ -17,8 +26,11 @@ pub const IOOperation = union(IOOperationType) {
     accept: bool,
     read: usize,
     write: usize,
-    close: usize,
+    close_connection: usize,
     timeout: void,
+    open_file: usize,
+    read_file: usize,
+    close_file: usize,
 };
 
 pub const Connection = struct {
@@ -28,6 +40,7 @@ pub const Connection = struct {
     is_ssl: bool = true,
     // if null, it means we are reading
     writer_state: ?command.WriteDataCommand = null,
+    file_reader_state: ?command.FileReaderState = null,
     non_ssl_read_bytes_pending: usize = 0,
     non_ssl_write_bytes_pending: usize = 0,
     non_ssl_write_bytes_done: usize = 0,
@@ -158,8 +171,8 @@ pub fn encode(op: IOOperation) u64 {
             const op_code: u64 = 0;
             return (op_code << config.index_bits) | @intFromBool(encrypted);
         },
-        IOOperationType.close => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close));
+        IOOperationType.close_connection => |index| {
+            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close_connection));
             return (op_code << config.index_bits) | index;
         },
         IOOperationType.read => |index| {
@@ -174,6 +187,18 @@ pub fn encode(op: IOOperation) u64 {
             const op_code: u64 = @intCast(@intFromEnum(IOOperationType.timeout));
             return (op_code << config.index_bits);
         },
+        IOOperationType.open_file => |index| {
+            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.open_file));
+            return (op_code << config.index_bits) | index;
+        },
+        IOOperationType.read_file => |index| {
+            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.read_file));
+            return (op_code << config.index_bits) | index;
+        },
+        IOOperationType.close_file => |index| {
+            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close_file));
+            return (op_code << config.index_bits) | index;
+        },
     };
 }
 
@@ -185,9 +210,12 @@ pub fn decode(op: u64) IOOperation {
     const op_type: IOOperationType = @enumFromInt(op_type_code);
     return switch (op_type) {
         IOOperationType.accept => IOOperation{ .accept = if (index == 0) false else true },
-        IOOperationType.close => IOOperation{ .close = index },
+        IOOperationType.close_connection => IOOperation{ .close_connection = index },
         IOOperationType.read => IOOperation{ .read = index },
         IOOperationType.write => IOOperation{ .write = index },
         IOOperationType.timeout => IOOperation.timeout,
+        IOOperationType.open_file => IOOperation{ .open_file = index },
+        IOOperationType.read_file => IOOperation{ .read_file = index },
+        IOOperationType.close_file => IOOperation{ .close_file = index },
     };
 }

@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const CommandType = enum(u8) {
     write_data,
     check_status,
@@ -51,4 +53,28 @@ pub const WriteDataCommand = struct {
     file_bytes_written: usize = 0,
     should_add_etag: bool = true,
     is_head_method: bool = false,
+};
+
+pub const FileReaderStateType = enum {
+    open_file,
+    read_file,
+    close_file,
+};
+
+pub const OpenFileState = struct {
+    path: [:0]const u8,
+    len: usize,
+};
+
+pub const ReadFileState = struct {
+    handle: std.posix.fd_t,
+    offset: usize,
+    len: usize,
+};
+
+pub const FileReaderState = union(FileReaderStateType) {
+    open_file: OpenFileState,
+    read_file: ReadFileState,
+    // file handle
+    close_file: std.posix.fd_t,
 };

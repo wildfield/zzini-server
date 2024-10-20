@@ -1,11 +1,24 @@
 const std = @import("std");
 const config = @import("config.zig");
 
+pub const FileDataType = enum(u1) {
+    memory,
+    filesystem,
+};
+
+pub const FileData = union(FileDataType) {
+    // Memory contains file contents
+    memory: []const u8,
+    // File system contains file path
+    filesystem: [:0]const u8,
+};
+
 pub const FileInfo = struct {
-    data: []const u8,
+    data: FileData,
     hash: []const u8,
     mime: []const u8,
     is_compressed: bool,
+    len: usize,
 };
 
 pub const FileIndexMap = std.StringHashMap(usize);
@@ -103,7 +116,9 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                         const binary_postfix = "binary";
                         const should_compress =
                             (mime.len < binary_postfix.len or !std.mem.eql(u8, binary_postfix, mime[mime.len - binary_postfix.len .. mime.len]));
-                        var file_data_storage: []u8 = undefined;
+                        var file_data_storage: ?[]u8 = null;
+                        var file_len: usize = undefined;
+                        var hash: u64 = undefined;
                         if (should_compress) {
                             var file_cache_data_stream = std.io.fixedBufferStream(file_cache_buffer);
                             const file_cache_data_writer = file_cache_data_stream.writer();
@@ -114,25 +129,39 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                                 continue;
                             }
                             file_data_storage = try output_allocator.dupe(u8, data_written);
+                            file_len = file_data_storage.?.len;
+                            hash = std.hash.XxHash64.hash(seed, file_data_storage.?);
                         } else {
-                            const bytes_written = try file_reader.readAll(file_cache_buffer);
-                            if (bytes_written == file_cache_buffer.len) {
-                                std.log.err("File {s} exceeded max_size {}", .{ item.name, file_cache_buffer.len });
-                                continue;
+                            file_len = (try file_handle.stat()).size;
+                            var hasher = std.hash.XxHash64.init(seed);
+                            var buffer: [1024 * 16]u8 = undefined;
+                            while (true) {
+                                const read_bytes = try file_reader.read(&buffer);
+                                if (read_bytes == 0) {
+                                    break;
+                                }
+                                const file_data = buffer[0..read_bytes];
+                                hasher.update(file_data);
                             }
-                            file_data_storage = try output_allocator.dupe(u8, file_cache_buffer[0..bytes_written]);
+                            hash = hasher.final();
                         }
-                        const hash = std.hash.XxHash64.hash(seed, file_data_storage);
-                        const hash_size = comptime std.base64.standard.Encoder.calcSize(8);
+                        const hash_size = comptime std.base64.standard.Encoder.calcSize(@sizeOf(@TypeOf(hash)));
                         const encoded_hash = try output_allocator.alloc(u8, hash_size);
                         _ = std.base64.standard.Encoder.encode(encoded_hash, &std.mem.toBytes(hash));
                         const http_path = try output_allocator.dupe(u8, item.http_path);
                         std.log.debug("File name {s} http path {s}", .{ item.name, item.http_path });
                         const file_info = FileInfo{
-                            .data = file_data_storage,
+                            .data = if (file_data_storage) |storage|
+                                .{ .memory = storage }
+                            else blk: {
+                                var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                                const realpath = try parent_folder.realpath(item.name, &realpath_buffer);
+                                break :blk .{ .filesystem = try output_allocator.dupeZ(u8, realpath) };
+                            },
                             .hash = encoded_hash,
                             .mime = mime,
                             .is_compressed = should_compress,
+                            .len = file_len,
                         };
                         try array_file_storage.append(file_info);
                         try file_index_map.put(http_path, array_file_storage.items.len - 1);
