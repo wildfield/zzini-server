@@ -18,7 +18,7 @@ const c = @cImport({
 
 // Global options. This sets global log level to info
 pub const std_options = .{
-    .log_level = .debug,
+    .log_level = .info,
 };
 
 // const tracy = @cImport({
