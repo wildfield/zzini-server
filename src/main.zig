@@ -844,6 +844,7 @@ fn closeGracefully(
         conns.connections[index].is_closing_gracefully = true;
         const engine = &conns.ssl_contexts[index].eng;
         ssl.br_ssl_engine_close(engine);
+        conns.connections[index].writer_state = null;
         try nextStepSSL(index, context, ring);
     } else {
         try prepareClose(ring, conns, index);
