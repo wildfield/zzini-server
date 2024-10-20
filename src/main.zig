@@ -587,31 +587,31 @@ fn run(
                     } else {
                         const bytes_read: usize = @intCast(cqe.res);
                         const conn = &conns.connections[index];
+                        switch (conn.file_reader_state.?) {
+                            .read_file => |info| {
+                                const next_offset = info.offset + bytes_read;
+                                if (next_offset > info.len) {
+                                    std.log.err("We've read too many bytes from a file. Server needs a restart", .{});
+                                    std.process.exit(1);
+                                } else if (next_offset == info.len) {
+                                    conn.file_reader_state = .{ .close_file = info.handle };
+                                } else {
+                                    conn.file_reader_state = .{ .read_file = .{
+                                        .handle = info.handle,
+                                        .len = info.len,
+                                        .offset = next_offset,
+                                    } };
+                                }
+                            },
+                            else => {
+                                std.log.err("Unexpected file_reader_state in read_file", .{});
+                                std.process.exit(1);
+                            },
+                        }
                         if (conn.is_ssl) {
                             const engine = &conns.ssl_contexts[index].eng;
                             ssl.br_ssl_engine_sendapp_ack(engine, bytes_read);
                             ssl.br_ssl_engine_flush(engine, 0);
-                            switch (conn.file_reader_state.?) {
-                                .read_file => |info| {
-                                    const next_offset = info.offset + bytes_read;
-                                    if (next_offset > info.len) {
-                                        std.log.err("We've read too many bytes from a file. Server needs a restart", .{});
-                                        std.process.exit(1);
-                                    } else if (next_offset == info.len) {
-                                        conn.file_reader_state = .{ .close_file = info.handle };
-                                    } else {
-                                        conn.file_reader_state = .{ .read_file = .{
-                                            .handle = info.handle,
-                                            .len = info.len,
-                                            .offset = next_offset,
-                                        } };
-                                    }
-                                },
-                                else => {
-                                    std.log.err("Unexpected file_reader_state in read_file", .{});
-                                    std.process.exit(1);
-                                },
-                            }
                             try nextStepSSL(index, context, &ring);
                         } else {
                             conn.non_ssl_write_bytes_pending += bytes_read;
@@ -922,9 +922,9 @@ fn prepareClose(ring: *linux.IoUring, conns: *connections.Connections, index: us
                     handle = close_handle;
                 },
             }
-            if (handle) {
+            if (handle) |fd| {
                 const sqe = try ring.get_sqe();
-                sqe.prep_close(handle);
+                sqe.prep_close(fd);
                 sqe.user_data = connections.encode(.{ .close_file = index });
                 closing_file = true;
             }
@@ -1192,7 +1192,7 @@ fn prepareNonSSLFileReaderOps(
         },
         .read_file => |info| {
             const conn = &context.conns.connections[index];
-            const buf = &context.conns.ssl_buffers[index];
+            const buf = context.conns.ssl_buffers[index];
             sqe.prep_read(info.handle, buf[conn.non_ssl_write_bytes_pending..], info.offset);
             sqe.user_data = connections.encode(.{ .read_file = index });
         },
@@ -1218,8 +1218,10 @@ fn nextStepNonSSL(
             if (conn.non_ssl_read_bytes_pending > 0) {
                 // We have extra data
                 close = true;
+            } else if (conn.non_ssl_write_bytes_pending > 0) {
+                try prepareWriteNonSSL(ring, context.conns, index);
             } else {
-                prepareNonSSLFileReaderOps(index, context, file_reader, ring);
+                try prepareNonSSLFileReaderOps(index, context, file_reader, ring);
             }
         } else if (conn.writer_state) |writer_state| {
             if (conn.non_ssl_read_bytes_pending > 0) {
