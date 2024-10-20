@@ -61,7 +61,7 @@ const CurrentArgument = enum {
 // Each connection can have at most 1 request
 // + at most 2 accept requests
 // However, sqe demands power of 2 entries
-pub const max_entries = max_connections << 2;
+pub const max_entries = max_connections << 1;
 
 pub fn main() !u8 {
     tracyMarkStart("main");
