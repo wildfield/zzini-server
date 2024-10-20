@@ -154,7 +154,7 @@ pub fn loadFiles(external_allocator: std.mem.Allocator, filename: []const u8) !L
                             .data = if (file_data_storage) |storage|
                                 .{ .memory = storage }
                             else blk: {
-                                var realpath_buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
+                                var realpath_buffer: [std.fs.max_path_bytes]u8 = undefined;
                                 const realpath = try parent_folder.realpath(item.name, &realpath_buffer);
                                 break :blk .{ .filesystem = try output_allocator.dupeZ(u8, realpath) };
                             },
