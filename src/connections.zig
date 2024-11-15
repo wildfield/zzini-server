@@ -20,6 +20,12 @@ pub const IOOperationType = enum(u3) {
     close_file,
 };
 
+const IndexedOp = packed struct(u64) {
+    op: IOOperationType,
+    index: std.meta.Int(.unsigned, config.index_bits),
+    _: std.meta.Int(.unsigned, 64 - @as(u16, config.index_bits) - @bitSizeOf(IOOperationType)) = 0,
+};
+
 // All operations except for accept also contain a connection index
 pub const IOOperation = union(IOOperationType) {
     // accept: true if encrypted, false if unencrypted
@@ -168,46 +174,69 @@ pub const Connections = struct {
 pub fn encode(op: IOOperation) u64 {
     return switch (op) {
         IOOperationType.accept => |encrypted| {
-            const op_code: u64 = 0;
-            return (op_code << config.index_bits) | @intFromBool(encrypted);
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intFromBool(encrypted),
+            };
+            return @bitCast(pack);
         },
         IOOperationType.close_connection => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close_connection));
-            return (op_code << config.index_bits) | index;
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intCast(index),
+            };
+            return @bitCast(pack);
         },
         IOOperationType.read => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.read));
-            return (op_code << config.index_bits) | index;
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intCast(index),
+            };
+            return @bitCast(pack);
         },
         IOOperationType.write => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.write));
-            return (op_code << config.index_bits) | index;
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intCast(index),
+            };
+            return @bitCast(pack);
         },
         IOOperationType.timeout => {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.timeout));
-            return (op_code << config.index_bits);
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = 0,
+            };
+            return @bitCast(pack);
         },
         IOOperationType.open_file => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.open_file));
-            return (op_code << config.index_bits) | index;
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intCast(index),
+            };
+            return @bitCast(pack);
         },
         IOOperationType.read_file => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.read_file));
-            return (op_code << config.index_bits) | index;
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intCast(index),
+            };
+            return @bitCast(pack);
         },
         IOOperationType.close_file => |index| {
-            const op_code: u64 = @intCast(@intFromEnum(IOOperationType.close_file));
-            return (op_code << config.index_bits) | index;
+            const pack = IndexedOp{
+                .op = std.meta.activeTag(op),
+                .index = @intCast(index),
+            };
+            return @bitCast(pack);
         },
     };
 }
 
 // Decodes operation to user data for IOUring
 pub fn decode(op: u64) IOOperation {
-    const index_mask: u64 = comptime ~(@shlWithOverflow(@as(u64, std.math.maxInt(u64)), config.index_bits)[0]);
-    const index = op & index_mask;
-    const op_type_code = op >> config.index_bits;
-    const op_type: IOOperationType = @enumFromInt(op_type_code);
+    const indexed_op: IndexedOp = @bitCast(op);
+    const op_type: IOOperationType = indexed_op.op;
+    const index = indexed_op.index;
     return switch (op_type) {
         IOOperationType.accept => IOOperation{ .accept = if (index == 0) false else true },
         IOOperationType.close_connection => IOOperation{ .close_connection = index },
