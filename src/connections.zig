@@ -172,64 +172,57 @@ pub const Connections = struct {
 
 // Encodes operation to user data for IOUring
 pub fn encode(op: IOOperation) u64 {
-    return switch (op) {
-        IOOperationType.accept => |encrypted| {
-            const pack = IndexedOp{
+    const pack = switch (op) {
+        IOOperationType.accept => |encrypted| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intFromBool(encrypted),
             };
-            return @bitCast(pack);
         },
-        IOOperationType.close_connection => |index| {
-            const pack = IndexedOp{
+        IOOperationType.close_connection => |index| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intCast(index),
             };
-            return @bitCast(pack);
         },
-        IOOperationType.read => |index| {
-            const pack = IndexedOp{
+        IOOperationType.read => |index| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intCast(index),
             };
-            return @bitCast(pack);
         },
-        IOOperationType.write => |index| {
-            const pack = IndexedOp{
+        IOOperationType.write => |index| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intCast(index),
             };
-            return @bitCast(pack);
         },
-        IOOperationType.timeout => {
-            const pack = IndexedOp{
+        IOOperationType.timeout => blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = 0,
             };
-            return @bitCast(pack);
         },
-        IOOperationType.open_file => |index| {
-            const pack = IndexedOp{
+        IOOperationType.open_file => |index| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intCast(index),
             };
-            return @bitCast(pack);
         },
-        IOOperationType.read_file => |index| {
-            const pack = IndexedOp{
+        IOOperationType.read_file => |index| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intCast(index),
             };
-            return @bitCast(pack);
         },
-        IOOperationType.close_file => |index| {
-            const pack = IndexedOp{
+        IOOperationType.close_file => |index| blk: {
+            break :blk IndexedOp{
                 .op = std.meta.activeTag(op),
                 .index = @intCast(index),
             };
-            return @bitCast(pack);
         },
     };
+    return @bitCast(pack);
 }
 
 // Decodes operation to user data for IOUring
